@@ -6,15 +6,20 @@ import ast
 from collections import defaultdict
 import gurobipy as gp
 from gurobipy import GRB
+import strconv
 toursDF = pd.DataFrame()
 interceptDF = pd.DataFrame()
 maxZoneNR = 0
 zones = []
 m = gp.Model()
 tourWeight = gp.tupledict([])
+tourDeviation = gp.tupledict([])
+totalError = []
 ODtupledict = gp.tupledict([])
 absoluteErrors =gp.tupledict([])
 processNewData = False
+writeODDictFile = False
+writeBaseModel = False
 
 
 
@@ -28,14 +33,44 @@ def initializeModel(upperbound=5, threshold=0.01):
     global m
     global tourWeight
     global absoluteErrors
+    global tourDeviation
+    global totalError
     m = gp.Model(f"Threshold: {threshold}, Upperbound: {upperbound}")
-    tourWeight = m.addVars(toursDF.index.tolist(), vtype=GRB.SEMICONT, lb=0.0, ub=upperbound)
-    absoluteErrors = m.addVars(zones, zones,  vtype=GRB.CONTINUOUS, lb=0.0)
+    tourWeight = m.addVars(toursDF.index.tolist(), vtype=GRB.SEMICONT, lb=0.0, ub=upperbound, name="TourWeight")
+    totalError = m.addVar(vtype=GRB.CONTINUOUS, lb=0.0, ub = upperbound*toursDF.index.size, name="Deviation")
+    tourDeviation = m.addVars(toursDF.index.tolist(),
+                              vtype=GRB.SEMICONT, lb=-1.0, ub=upperbound-1.0, name="TourWeight")
+    absoluteErrors = m.addVars(list(ODtupledict.keys()),  vtype=GRB.CONTINUOUS, lb=0.0, name="AbsoluteErrors")
+    m.update()
+
     return
 
 
-def addConstraints(threshold = 0.01):
+def addConstraints(threshold=0.01):
+    correctionValue = 0
+    for ODpair, agents in ODtupledict.items():
+        interceptValue = interceptDF.at[ODpair[1],ODpair[0]]
+        thresholdValueCheck = interceptDF.at[ODpair]
+        if thresholdValueCheck > threshold:
+            m.addConstr((gp.quicksum((tourWeight[tourID]*toursDF.at[tourID, "Prob_auto"]) for tourID in agents)
+                            <= absoluteErrors[ODpair] + thresholdValueCheck) , name=f"positive errors ODpair {ODpair}")
+            m.addConstr((gp.quicksum((tourWeight[tourID] * toursDF.at[tourID, "Prob_auto"]) for tourID in agents)
+                          >= -absoluteErrors[ODpair] + thresholdValueCheck), name=f"negative errors ODpair {ODpair}")
+        else:
+            correctionValue += thresholdValueCheck
+    print(correctionValue)
+    m.addConstrs(((tourWeight[ODpair]-1 == tourDeviation[ODpair]) for ODpair in toursDF.index.tolist()),
+                 name="Deviation of tour")
+    m.addConstr(totalError == gp.norm(tourDeviation,1), name=f"total error")
+    m.update()
     return
+
+
+def addObjective():
+    objective = (gp.quicksum(absoluteErrors[ODpair] for ODpair in ODtupledict.keys())
+                 + (1.0/toursDF.index.size)*totalError) #
+    m.setObjective(objective, GRB.MINIMIZE)
+    m.update()
 
 
 def readData(interceptName="", processedTours=""):
@@ -103,32 +138,57 @@ def toursToODDict():
 
     # Adds the trips of the tours with 1 destination
     for index, info in toursDF.loc[bool2Trip].iterrows():
-        ODdefaultDict[(info["Woonzone"], info["Hoofdbestemming_auto"])].append(info["agentID"])
-        ODdefaultDict[(info["Hoofdbestemming_auto"], info["Woonzone"])].append(info["agentID"])
+        ODdefaultDict[(info["Woonzone"], info["Hoofdbestemming_auto"])].append(index)
+        ODdefaultDict[(info["Hoofdbestemming_auto"], info["Woonzone"])].append(index)
 
     # Adds the internal trips of the tours with 2 destinations, main location first
     for index, info in toursDF.loc[boolHNTrip].iterrows():
         if info["Hoofdbestemming_auto"] <= maxZoneNR:
-            ODdefaultDict[(info["Woonzone"], info["Hoofdbestemming_auto"])].append(info["agentID"])
+            ODdefaultDict[(info["Woonzone"], info["Hoofdbestemming_auto"])].append(index)
             if info["Nevenbestemming_auto"] <= maxZoneNR:
-                ODdefaultDict[(info["Hoofdbestemming_auto"], info["Nevenbestemming_auto"])].append(info["agentID"])
-                ODdefaultDict[(info["Nevenbestemming_auto"], info["Woonzone"])].append(info["agentID"])
+                ODdefaultDict[(info["Hoofdbestemming_auto"], info["Nevenbestemming_auto"])].append(index)
+                ODdefaultDict[(info["Nevenbestemming_auto"], info["Woonzone"])].append(index)
         elif info["Nevenbestemming_auto"] <= maxZoneNR:
-            ODdefaultDict[(info["Nevenbestemming_auto"], info["Woonzone"])].append(info["agentID"])
+            ODdefaultDict[(info["Nevenbestemming_auto"], info["Woonzone"])].append(index)
 
     # Adds the internal trips of the tours with 2 destinations, secondary location first
     for index, info in toursDF.loc[boolNHTrip].iterrows():
         if info["Nevenbestemming_auto"] <= maxZoneNR:
-            ODdefaultDict[(info["Woonzone"], info["Nevenbestemming_auto"])].append(info["agentID"])
+            ODdefaultDict[(info["Woonzone"], info["Nevenbestemming_auto"])].append(index)
             if info["Hoofdbestemming_auto"] <= maxZoneNR:
-                ODdefaultDict[(info["Nevenbestemming_auto"], info["Hoofdbestemming_auto"])].append(info["agentID"])
-                ODdefaultDict[(info["Hoofdbestemming_auto"], info["Woonzone"])].append(info["agentID"])
+                ODdefaultDict[(info["Nevenbestemming_auto"], info["Hoofdbestemming_auto"])].append(index)
+                ODdefaultDict[(info["Hoofdbestemming_auto"], info["Woonzone"])].append(index)
         elif info["Hoofdbestemming_auto"] <= maxZoneNR:
-            ODdefaultDict[(info["Hoofdbestemming_auto"], info["Woonzone"])].append(info["agentID"])
+            ODdefaultDict[(info["Hoofdbestemming_auto"], info["Woonzone"])].append(index)
 
     ODtupledict = gp.tupledict(ODdefaultDict)
+    # for key, value in ODdefaultDict.items():
+    #     ODtupledict[key] = value
     return
 
+
+def writeTupleDict(tupleDict, location):
+    with open(location, "w") as f:
+        for key, value in tupleDict.items():
+            keyString = str(key[0])
+            for i in range(1,len(key)):
+                keyString += "," + str(key[i])
+            valueString = str(value[0])
+            for i in range(1,len(value)):
+                valueString += "," + str(value[i])
+            entryString = keyString + ":" + valueString +"\n"
+            f.write(entryString)
+
+
+def readTupleDict(location):
+    newTD = gp.tupledict([])
+    with open(location, "r") as f:
+        for entry in f.readlines():
+            key, value = entry.split(":")
+            tupleKey = tuple([int(k) for k in key.split(",")])
+            listValue = [int(v) for v in value.split(",")]
+            newTD[tupleKey] = listValue
+    return newTD
 
 
 # Press the green button in the gutter to run the script.
@@ -142,8 +202,29 @@ if __name__ == '__main__':
     else:
         print("ProcessedTours.csv found!")
     readData("NormObservedMatrix.txt", "processedTours.csv")
-    toursToODDict()
+    if writeODDictFile or not os.path.isfile("ODtupledict.txt"):
+        toursToODDict()
+        writeTupleDict(ODtupledict, "ODtupledict.txt")
+    else:
+        ODtupledict = readTupleDict("ODtupledict.txt")
     initializeModel(5, 0.01)
+    addConstraints(0.01)
+    addObjective()
+    m.optimize()
+    objective = 0
+    for i in range(1, maxZoneNR+1):
+        for j in range(1, maxZoneNR+1):
+            agents = ODtupledict.get(tuple([i,j]), [])
+            objective += abs(sum((tourWeight[tourID].x*toursDF.at[tourID, "Prob_auto"]) for tourID in agents) - interceptDF[i][j])
+    print(objective)
+    print(totalError.x /toursDF.index.size)
     print("Read input.")
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+# Currently finding an objective of 193211.88903641407,
+# while Sanne found 174398.99584534226. Possible explainations that come to mind:
+# She throws out all tours that have a secondary location of 696.
+# She reads the observation matrix with higher precision, potentially allowing closer results
+# Other factors I fail to notice
+#
+#
+# Investigate if it is necessary to set tours that use roads below the threshold need to be set to 0.

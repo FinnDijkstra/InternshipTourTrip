@@ -254,7 +254,8 @@ if __name__ == '__main__':
     print("Adding Constraints")
     setOfPairs = addConstraints(0.0)
     addObjective()
-    m.setParam("MIPGap", 0.05)
+    m.setParam("MIPGap", 0.0025)
+    m.setParam("MIPFocus", 2)
     m.optimize()
     objective = 0
     for i in range(1, maxZoneNR+1):
@@ -268,6 +269,9 @@ if __name__ == '__main__':
     print(objective)
     # print(len(setOfPairs))
     print((1.0/toursDF.index.size) * totalError.x)
+    tourWeightDict = {tourID: tour.x for tourID, tour in tourWeight.items()}
+    tourWeightSeries = pd.Series(tourWeightDict)
+    tourWeightSeries.to_csv("weightSeries.csv")
     tourWeightResults = [tour.x for tour in tourWeight.values()]
     tourWeightResults.sort()
     print(tourWeightResults[-1])

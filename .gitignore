@@ -2,3 +2,6 @@
 /.idea/
 /.idea/InternshipTourTrip.iml
 /model.mps
+/DiscreetClusters.json.gz
+/clusters.json
+/clusterOnODDict.json

@@ -1,7 +1,8 @@
 import gzip
 import ast
 import json
-import pandas
+
+import pandas as pd
 
 
 jsonfilename = "DiscreetClusters.json.gz"
@@ -17,7 +18,7 @@ def readToData(jsonfilename):
 
 def clustersToList(data):
     tours = {}
-    tourId = 1
+    tourId = 0
     for listString, value in data.items():
         lsv2 = listString[1:-1].split('][')
         tourList = []
@@ -27,7 +28,7 @@ def clustersToList(data):
                 ODstr = "[" + ODstr
             if ODno != len(lsv2)-1:
                 ODstr += "]"
-            tourList.append(tuple(ast.literal_eval(ODstr)))
+            tourList.append(f"{tuple(ast.literal_eval(ODstr))}")
         tours[tourId] = [value,tourList]
         tourId += 1
 
@@ -59,6 +60,7 @@ def findNeighbours(tours):
             maxNeighbours = noNeighbours
             maxID = tourID
         tourInfo.append(noNeighbours)
+        tourInfo.append(1.0)
         tours[tourID] = tourInfo
 
     print(tours[maxID])
@@ -72,9 +74,17 @@ def findNeighbours(tours):
     return tours, tourOnODDict, listOfKeys
 
 
+
+
+
+
 if __name__ == '__main__':
+    # data = {[[O,D],[O,D]]:weight}
     data = readToData(jsonfilename)
+    # clusters = {id:[weight, [(O,D),(O,D)]]}
     clusters = clustersToList(data)
+    # clusters = {id:[weight, [(O,D),(O,D)], set(neighbourID), noNeighbours]}
+    # clustersOnODDict = {(O,D):[clusterID]}
     clusters, clusterOnODDict, listOfKeys = findNeighbours(clusters)
     clustersJson = json.dumps(clusters, indent=4)
     clusterOnODDictStrKeys = {f"{OD}": value for OD, value in clusterOnODDict.items()}

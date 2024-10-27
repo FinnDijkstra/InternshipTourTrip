@@ -1,9 +1,12 @@
 import json
+import time
+
 import pandas as pd
 import igraph as ig
 import scipy
+import matplotlib.pyplot as plt
 import numpy as np
-from main import upperbound, nrOfAgents
+
 
 
 # screenlines = {screenlineName:{(O,D):value}
@@ -32,7 +35,18 @@ from main import upperbound, nrOfAgents
 # neighboursSl = sparce adjacency matrix tours as rows and columns,                     size is nxn
 #                   1 on off diagnal if they share screenline, diagonal how many neighbours it has
 
-
+aTO = scipy.sparse.csr_array((1,1))
+aOT = scipy.sparse.csr_array((1,1))
+aSO = scipy.sparse.csr_array((1,1))
+aTS = scipy.sparse.csr_array((1,1))
+aST = scipy.sparse.csr_array((1,1))
+nOD = scipy.sparse.csr_array((1,1))
+nSl = scipy.sparse.csr_array((1,1))
+cl = []
+tbw = []
+tp = []
+upperbound = 5
+penalty = 1
 # maxZonerNR = int
 # nrOfClusters = size of tourDict
 # baseWeightSum = sum of weights of tours in tourDict
@@ -72,17 +86,74 @@ def readInModelParams(interceptPath, screenlinesUsedBool, screenlinesPath, tourD
         for origin in range(1,maxZoneNR+1):
             for destination in range(1,maxZoneNR+1):
                 if f"({origin}, {destination})" in tourOnODDict:    # interceptDF.loc[origin-1, destination-1] > 0 and
-                    screenlines[f"sl{screenlineIndex}"] = {f"({origin}, {destination})":1.0}
-                    if origin > interceptSize or destination > interceptSize:
-                        counts[f"sl{screenlineIndex}"] = 0
-                    else:
+
+                    if not(origin > interceptSize or destination > interceptSize):
+                    #     cd[f"sl{screenlineIndex}"] = 0
+                    # else:
                         counts[f"sl{screenlineIndex}"] = interceptDF.loc[origin-1, destination-1]
-                    screenlineIndex += 1
+                        screenlines[f"sl{screenlineIndex}"] = {f"({origin}, {destination})": 1.0}
+                        screenlineIndex += 1
+
     nrOfClusters = len(tourOnODDict)
     baseWeightSum = sum(tourOnODDict[tour][0] for tour in tourOnODDict)
     tourNames = pd.Series(data=range(len(tourDict.keys())), index=tourDict.keys())
     screenlineNames = pd.Series(data=range(len(screenlines.keys())), index=screenlines.keys())
     ODNames = pd.Series(data=range(len(tourOnODDict.keys())), index=tourOnODDict.keys())
+    return
+
+
+def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tourDictPath, tourOnODDictPath, sopath,
+                       topath, tspath, oopath, sspath):
+    global aTO, aOT, aSO, aTS, aST, nOD, nSl, cl, tbw, tp, maxZoneNR, nrOfClusters, baseWeightSum, ODNames, \
+        tourNames, screenlineNames, penalty
+    sld = {}
+    cd = {}
+    with open(tourDictPath, 'r') as file:
+        tD = json.load(file)
+    with open(tourOnODDictPath, 'r') as file:
+        tOnODD = json.load(file)
+    if screenlinesUsedBool:
+        maxZoneNR = 1400
+        with open(screenlinesPath, 'r') as file:
+            sld = json.load(file)
+        with open(interceptPath, 'r') as file:
+            cd = json.load(file)
+    else:
+        interceptDF = pd.read_csv(interceptPath, sep=";", header=None)
+        maxZoneNR = 1400
+        interceptSize = interceptDF.index.size
+        screenlineIndex = 0
+        for origin in range(1,maxZoneNR+1):
+            for destination in range(1,maxZoneNR+1):
+                if f"({origin}, {destination})" in tOnODD:    # interceptDF.loc[origin-1, destination-1] > 0 and
+
+                    if not(origin > interceptSize or destination > interceptSize):
+                    #     cd[f"sl{screenlineIndex}"] = 0
+                    # else:
+                        cd[f"sl{screenlineIndex}"] = interceptDF.loc[origin-1, destination-1]
+                        sld[f"sl{screenlineIndex}"] = {f"({origin}, {destination})": 1.0}
+                        screenlineIndex += 1
+    nrOfClusters = len(tD)
+    baseWeightSum = sum(tD[tour][0] for tour in tD)
+    tourNames = pd.Series(data=range(len(tD.keys())), index=tD.keys())
+    screenlineNames = pd.Series(data=range(len(sld.keys())), index=sld.keys())
+    cl = [0] * screenlineNames.size
+    for name, idx in screenlineNames.items():
+        cl[idx] = cd[name]
+    tbw = [0] * nrOfClusters
+    tp = [0] * nrOfClusters
+    for name, idx in tourNames.items():
+        tbw[idx] = tD[name][0]
+        tp[idx] = tD[name][-1]
+    ODNames = pd.Series(data=range(len(tOnODD.keys())), index=tOnODD.keys())
+    aTO = scipy.sparse.load_npz(topath)
+    aOT = aTO.tocsc(copy=True).transpose()
+    aSO = scipy.sparse.load_npz(sopath)
+    aTS = scipy.sparse.load_npz(tspath)
+    aST = aTS.tocsc(copy=True).transpose()
+    nOD = scipy.sparse.load_npz(oopath)
+    nSl = scipy.sparse.load_npz(sspath)
+    penalty = max(aTS._getrow(rowID).indices.size for rowID in range(nrOfClusters))
     return
 
 
@@ -131,72 +202,149 @@ def makeSparceAdjacencyMatrices():
 
 
 class upperboundClass:
-    def __init__(self, ubMeth="tabooSearch", solutionDict=None, ubVector=None,
-                 lbVector=None, newConstraint=None, value=0, ubMethodParameters=None):
-        if lbVector is None:
-            lbVector = [0] * nrOfAgents
-        if ubVector is None:
-            ubVector = [upperbound] * nrOfAgents
-        if ubMethodParameters is None:
+    def __init__(self, ubParamDict):
+        ubMeth = ubParamDict.get("method", "tabooSearch")
+        solution = ubParamDict.get("solution", [])
+        baseUb1 = [upperbound*baseWeight for baseWeight in tbw]
+        ubVector = ubParamDict.get("ubVec", baseUb1)
+        lbVector = ubParamDict.get("lbVec", [0] * nrOfClusters)
+        newConstraint = ubParamDict.get("newConstraint", False)
+        value = ubParamDict.get("value", 0)
+        ubMethodParameters = ubParamDict.get("method", {})
+        if not ubMethodParameters:
             if ubMeth == "tabooSearch":
-                ubMethodParameters = {"maxDepth": 300, "tabooLength": 50, "maxNoImprovement": 30}
-        if solutionDict is None:
-            solutionDict = {"best": [max(lbVector[tourID], min(1, ubVector[tourID]))
-                                     for tourID in tourDict.keys()]}
+                ubMethodParameters = {"maxDepth": 150000, "tabooLength": 250, "maxNoImprovement": 450}
+        if not solution:
+            solution = [max(lbVector[tourID], min(tbw[tourID], ubVector[tourID]))
+                                     for tourID in range(nrOfClusters)]
         self.ubMethod = ubMeth
-        self.solution = solutionDict
+        self.solution = solution
         self.ubMethodParameters = ubMethodParameters
         self.value = value
         self.lbVector = lbVector
         self.ubVector = ubVector
         self.newConstraint = newConstraint
-        self.updateSolutions()
 
-    def updateSolutions(self):
-        side, tourID, value = self.newConstraint
-        for key, solutionList in self.solution.items():
-            if side * solutionList[tourID] > side * value:
-                self.solution[key][tourID] = value
+        if self.newConstraint:
+            self.updateSolutions(ubParamDict.get("Constraint", (0,0,0)))
+
+    def updateSolutions(self, Constraint):
+        side, tourID, value = Constraint
+        if side * self.solution[tourID] > side * value:
+            self.solution[tourID] = value
 
     def bound(self):
         if self.ubMethod == "tabooSearch":
-            self.tabooSearch(solutionKey="best", startingWeights=self.solution["best"])
+            self.solution, self.value = self.tabooSearch(startingWeights=self.solution)
 
-    def tabooSearch(self, solutionKey="best", startingWeights=None):
+    def tabooSearch(self, startingWeights=None):
         if startingWeights is None:
-            startingWeights = self.solution[solutionKey]
-        tempMax, diffDict = self.evaluateSolution(startingWeights)
-        tempValue = tempMax
+            minWeights = self.solution
+        else:
+            minWeights = startingWeights
+        curWeights = minWeights
+        minValue, solCounts = self.evaluateSolution(curWeights)
+        tempValue = minValue
         # first make matrix of objective change when in/decrementing a tour by 1
-        changeDiffDict = {1: [0] * nrOfClusters, -1: [0] * nrOfClusters}
-        for tourID in range(len(nrOfClusters)):
-            changeDiffDict[1][tourID] = self.calculateImprovement(startingWeights, change=(tourID, 1),
-                                                                  diffDict=diffDict)
-            changeDiffDict[-1][tourID] = self.calculateImprovement(startingWeights, change=(tourID, -1),
-                                                                   diffDict=diffDict)
-        changeDF = pd.DataFrame(changeDiffDict)
+        timeBeforeDiff = time.time()
+
+        changeDiffList = [0] * 2*nrOfClusters
+        for idx in range(2*nrOfClusters):
+            changeDiffList[idx] = self.calculateImprovement(curWeights,changeIdx=idx % nrOfClusters,
+                                                            changeSide=2*(idx // nrOfClusters)-1, solCounts=solCounts)
+
 
         depth = 0
         lastImprovement = 0
+        sumOfSizes = 0
         tabooList = []
+        improvementMoment = 0
+        improvementCount = 0
+        timeList = [0]
+        valueList = [minValue]
+        timeBeforeLoop = time.time()
+        print(f"Created difference vector in {timeBeforeLoop - timeBeforeDiff:.3f} seconds")
+        timeNow = time.time()
+        print(f"{minValue:.4f} ({timeNow - timeBeforeLoop:.3f}s)")
         while (depth < self.ubMethodParameters["maxDepth"] and
                lastImprovement < self.ubMethodParameters["maxNoImprovement"]):
-            minIDs = changeDF.idxmin(axis=1)
-            if changeDF.at[minIDs.at[1], 1] > changeDF.at[minIDs.at[-1], -1]:
-                step = (minIDs.at[-1], -1)
-            else:
-                step = (minIDs.at[1], 1)
+            # find best improvement
+            nextStepValue = min(changeDiffList)
+            nextStepIdx = changeDiffList.index(nextStepValue)
+            nextStepTIdx = nextStepIdx % nrOfClusters
+            nextStepSideBase = nextStepIdx // nrOfClusters
+            nextStepSide = 2*nextStepSideBase-1
 
-            if changeDF.at[step[0], step[1]] >= 0:
+
+            # update taboolist and start list of steps that need to be checked
+            tabooIdx = nextStepIdx + nrOfClusters % nrOfClusters*2
+            updateDiffs = {nextStepTIdx}
+            if tabooIdx in tabooList:
+                tabooList.remove(tabooIdx)
+            tabooList.append(tabooIdx)
+            if len(tabooList) >= self.ubMethodParameters["tabooLength"]:
+                updateDiffs.add(tabooList.pop(0) % nrOfClusters)
+
+            # update current Solution
+            tempValue += nextStepValue
+            curWeights[nextStepTIdx] += nextStepSide
+            for screenlineIdx in aTS._getrow(nextStepTIdx).indices:
+                solCounts[screenlineIdx] += nextStepSide
+            updateDiffs.update(nSl._getrow(nextStepTIdx).indices)
+
+            # check if we found a new best solution
+            if tempValue < minValue:
+                minValue = tempValue
+                minWeights = curWeights
+                lastImprovement = 0
+                improvementCount += 1
+
+                if depth-improvementMoment >= 1000:
+                    improvementMoment = depth
+                    timeNow = time.time()
+                    timeList.append(timeNow-timeBeforeLoop)
+                    valueList.append(minValue)
+                    print(f"{minValue:.4f} ({timeNow-timeBeforeLoop:.3f}s, average set size {sumOfSizes/depth:.1f}, {
+                            improvementCount*100/(depth+1):.3f}% of steps are improvements, {-improvementCount+depth+1} non improvements steps)")
+            else:
                 lastImprovement += 1
 
+            # update change vector
+            for tourIdx in updateDiffs:
+                for sideBase in [0,1]:
+                    changeDiffList[tourIdx+sideBase*nrOfClusters] = (
+                        self.calculatePenalizedImprovement(curWeights, tourIdx, sideBase, solCounts, tabooList))
 
-    def calculateImprovement(self, weights, change, diffDict):
-        newWeights = weights.copy()
-        newWeights[change[0]] += change[1]
-        tempDifference = (abs(weights[change[0]] - 1 + change[1]) - (abs(weights[change[0]] - 1))) / dimX
-        for OD in tourDict[change[0]]:
-            tempDifference += abs(self.calcScreenlineDiff(newWeights, ) - diffDict[OD[0]][OD[1]])
+            # incriment depth
+            sumOfSizes += 2*len(updateDiffs)
+            depth += 1
+        plt.plot(timeList, valueList)
+        print(depth)
+        print(lastImprovement)
+        return minWeights, minValue
+
+
+
+
+
+
+    def calculateImprovement(self, weights, changeIdx, changeSide, solCounts):
+        tempDifference = 1.0 / baseWeightSum
+        if changeSide*weights[changeIdx] < changeSide*tbw[changeIdx]:
+            tempDifference *= -1
+        for screenlineIdx in aTS._getrow(changeIdx).indices:
+            curAbs = abs(solCounts[screenlineIdx]-cl[screenlineIdx])
+            newAbs = abs(solCounts[screenlineIdx]+changeSide-cl[screenlineIdx])
+            tempDifference += newAbs-curAbs
+        if weights[changeIdx]+changeSide < self.lbVector[changeIdx] or weights[changeIdx]+changeSide > self.ubVector[changeIdx]:
+            tempDifference += 16*penalty
+        return tempDifference
+
+
+    def calculatePenalizedImprovement(self, weights, changeIdx, changeSideBase, solCounts, tabooList):
+        tempDifference = self.calculateImprovement(weights, changeIdx, 2*changeSideBase-1, solCounts)
+        if changeIdx + changeSideBase*nrOfClusters in tabooList:
+            tempDifference += 4*penalty
         return tempDifference
 
 
@@ -213,17 +361,19 @@ class upperboundClass:
         return value
 
     def evaluateSolution(self, solutionList=None):
+        sT = time.time()
         if solutionList is None:
-            solutionList = self.solution["best"]
-        value = sum(abs(weight - 1) for weight in solutionList) / dimX
-        diffDict = {}
-        for i in range(1,maxZoneNR+1):
-            diffDict[i] = {}
-            for j in range(1,maxZoneNR+1):
-                ODvalue = self.calcODDiff(solutionList, i, j)
-                value += abs(ODvalue)
-                diffDict[i][j] = ODvalue
-        return value, diffDict
+            solutionList = self.solution
+        value = sum(abs(solutionList[idx] - tbw[idx]) for idx in range(nrOfClusters)) / baseWeightSum
+        solCounts = [0]*screenlineNames.size
+        for screenlineIdx in range(screenlineNames.size):
+            toursInScreenline = aST._getrow(screenlineIdx).indices
+            solCount = sum(solutionList[tour] for tour in toursInScreenline)
+            solCounts[screenlineIdx] = solCount
+            value += abs(solCount - cl[screenlineIdx])
+        eT = time.time()
+        print(f"Evaluated Solution in {eT-sT:.3f} seconds")
+        return value, solCounts
 
 
 class lowerboundClass:
@@ -329,16 +479,44 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict):
 
 
 if __name__ == '__main__':
-    interceptFile = "NormObservedMatrix.txt"
-    screenlinesUsed = False
-    screenlinesFile = "NormObservedMatrix.txt"
-    tourDictFile = "clusters.json"
-    tourOnODDictFile = "clusterOnODDict.json"
-    readInModelParams(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile)
-    makeSparceAdjacencyMatrices()
-    upperboundParameterDict = {}
-    lowerboundParameterDict = {}
-    splitInequalityParameterDict = {}
-    branchAndBoundParameterDict = {}
+    parametersType = 2
+    if parametersType == 1:
+        interceptFile = "NormObservedMatrix.txt"
+        screenlinesUsed = False
+        screenlinesFile = "NormObservedMatrix.txt"
+        tourDictFile = "clusters.json"
+        tourOnODDictFile = "clusterOnODDict.json"
+
+        readInModelParams(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile)
+        makeSparceAdjacencyMatrices()
+    else:
+        interceptFile = "NormObservedMatrix.txt"
+        screenlinesUsed = False
+        screenlinesFile = "NormObservedMatrix.txt"
+        tourDictFile = "clusters.json"
+        tourOnODDictFile = "clusterOnODDict.json"
+        adjsofile = "adjSlOD.npz"
+        adjtofile = "adjTourOD.npz"
+        adjtsfile = "adjTourSl.npz"
+        neighofile = "neighboursOD.npz"
+        neighsfile = "neighboursSl.npz"
+        startTime = time.time()
+        readInModelParams2(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile,adjsofile,
+                           adjtofile, adjtsfile, neighofile, neighsfile)
+        readTime = time.time()
+        print(f"Read parameters in {readTime - startTime:.3f} seconds")
+        upperboundParameterDict = {}
+        lowerboundParameterDict = {}
+        splitInequalityParameterDict = {}
+        upperbounder = upperboundClass(upperboundParameterDict)
+        initTime = time.time()
+        print(f"Created Class in {initTime - readTime:.3f} seconds")
+        upperbounder.bound()
+        boundTime = time.time()
+        print(f"Taboosearch finished in {boundTime - initTime:.3f} seconds")
+        print(upperbounder.value)
+        plt.show()
+        branchAndBoundParameterDict = {}
+
     #branchAndBound(upperboundParameterDict, lowerboundParameterDict,
     #               splitInequalityParameterDict, branchAndBoundParameterDict)

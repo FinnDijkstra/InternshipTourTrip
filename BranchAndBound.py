@@ -45,6 +45,7 @@ nSl = scipy.sparse.csr_array((1,1))
 cl = []
 tbw = []
 tp = []
+tComp = []
 upperbound = 5
 penalty = 1
 # maxZonerNR = int
@@ -105,7 +106,7 @@ def readInModelParams(interceptPath, screenlinesUsedBool, screenlinesPath, tourD
 def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tourDictPath, tourOnODDictPath, sopath,
                        topath, tspath, oopath, sspath):
     global aTO, aOT, aSO, aTS, aST, nOD, nSl, cl, tbw, tp, maxZoneNR, nrOfClusters, baseWeightSum, ODNames, \
-        tourNames, screenlineNames, penalty
+        tourNames, screenlineNames, penalty, tComp
     sld = {}
     cd = {}
     with open(tourDictPath, 'r') as file:
@@ -150,6 +151,7 @@ def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tour
     aOT = aTO.tocsc(copy=True).transpose()
     aSO = scipy.sparse.load_npz(sopath)
     aTS = scipy.sparse.load_npz(tspath)
+    tComp = [1/(aTS._getrow(tourIdx).indices.size) for tourIdx in range(nrOfClusters)]
     aST = aTS.tocsc(copy=True).transpose()
     nOD = scipy.sparse.load_npz(oopath)
     nSl = scipy.sparse.load_npz(sspath)
@@ -391,15 +393,15 @@ class lowerboundClass:
         self.lbMethod = lbParamDict.get("method", "tripBasedLP")
         self.value = lbParamDict.get("value",0)
         self.newConstraint = lbParamDict.get("newConstraint",(0,0,0))
-        self.markedODs = []
-        self.markODs()
+        self.markedSls = []
+        self.markSls()
 
-    def markODs(self):
+    def markSls(self):
         if self.firstRun:
-            self.markedODs = [range(screenlineNames.size)]
+            self.markedSls = [range(screenlineNames.size)]
         else:
             side, tourID, value = self.newConstraint
-            self.markedODs = [slIdx for slIdx in aTS._getrow(tourID).indices]
+            self.markedSls = [slIdx for slIdx in aTS._getrow(tourID).indices]
 
     def bound(self):
         if self.lbMethod == "tripBasedLP":
@@ -408,24 +410,27 @@ class lowerboundClass:
             print(f"The lowerbound method '{self.lbMethod}' is not supported")
 
     def evaluateSolution(self):
-        value = 0
-        for origin, destDict in self.solution.items():
-            for destination, odDict in destDict.items():
-                ODval = 0
-                for tourID, weight in odDict.items():
-                    ODval += weight * toursDF.at[tourID, "prob_auto"]
-                value += abs(ODval - interceptDF.at[origin, destination])
-        for tourID, ODlist in tourODsDict.items():
-            totalTourWeight = 0
-            for OD in ODlist:
-                totalTourWeight += self.solution[OD[0]][OD[1]][tourID]
-            value += abs(totalTourWeight / len(ODlist) - 1) / dimX
+        solCounts = []
+        for slIdx in range(screenlineNames.size):
+            slCount = 0
+            for tourIdx, weight in aST._getrow(slIdx):
+                slCount += weight * self.solution[tourIdx]
+            solCounts.append(slCount)
+        value = sum(abs(solCounts[slIdx]-cl[slIdx]) for slIdx in range(screenlineNames.size))
+        value += sum(abs(self.solution[tourIdx]-tbw[tourIdx]) for tourIdx in range(nrOfClusters))/baseWeightSum
         self.value = value
+        return solCounts
 
     def tripBasedLPBound(self):
         Linear = True
-        for slIdx in range(screenlineNames.size):
+        for slIdx in self.markedSls:
             count = cl[slIdx]
+            tourRow = aST._getrow(slIdx)
+            columnList = [tourRow.indices]
+            valueList = [tComp[tourIdx]/(tp[tourIdx]*tourValue) for tourIdx, tourValue in tourRow.items()]
+            DecendingDensities = sorted(columnList, key=lambda k: valueList[k], reverse=True)
+            curSol = [self.lbVector[tourIdx] for tourIdx in DecendingDensities]
+            curCount = sum()
 
 
             interceptValue = interceptDF.at[OD[0], OD[1]]

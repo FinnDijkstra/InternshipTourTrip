@@ -2,7 +2,7 @@ import json
 import time
 
 import pandas as pd
-import igraph as ig
+from multiprocessing import Pool
 import scipy
 import matplotlib.pyplot as plt
 import numpy as np
@@ -151,7 +151,7 @@ def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tour
     aOT = aTO.tocsc(copy=True).transpose()
     aSO = scipy.sparse.load_npz(sopath)
     aTS = scipy.sparse.load_npz(tspath)
-    tComp = [1/(aTS._getrow(tourIdx).indices.size) for tourIdx in range(nrOfClusters)]
+    tComp = [1/(max(1,aTS._getrow(tourIdx).indices.size)*baseWeightSum) for tourIdx in range(nrOfClusters)]
     aST = aTS.tocsc(copy=True).transpose()
     nOD = scipy.sparse.load_npz(oopath)
     nSl = scipy.sparse.load_npz(sspath)
@@ -203,6 +203,13 @@ def makeSparceAdjacencyMatrices():
     return
 
 
+def process_trip(params):
+
+    tourOrder, slSol, slVal = lowerboundClass.optimizeTrip(params)
+    return params[-1], tourOrder, slSol, slVal
+
+
+
 class upperboundClass:
     def __init__(self, ubParamDict):
         ubMeth = ubParamDict.get("method", "tabooSearch")
@@ -215,7 +222,7 @@ class upperboundClass:
         ubMethodParameters = ubParamDict.get("method", {})
         if not ubMethodParameters:
             if ubMeth == "tabooSearch":
-                ubMethodParameters = {"maxDepth": 150000, "tabooLength": 250, "maxNoImprovement": 450}
+                ubMethodParameters = {"maxDepth": 150000, "tabooLength": 100, "maxNoImprovement": 80}
         if not solution:
             solution = [max(lbVector[tourID], min(tbw[tourID], ubVector[tourID]))
                                      for tourID in range(nrOfClusters)]
@@ -383,14 +390,16 @@ class lowerboundClass:
     def __init__(self, lbParamDict):
         self.lbVector = lbParamDict.get("lbVector", [0] * nrOfClusters)
         self.ubVector = lbParamDict.get("ubVector", [upperbound * tbw[idx] for idx in range(nrOfClusters)])
-        self.solution = lbParamDict.get("solution",
+        self.solution = lbParamDict.get("solutionBase",
                                         [min(self.ubVector[idx], max(tbw[idx],self.lbVector[idx]))
                                          for idx in range(nrOfClusters)])
-        if lbParamDict.has_key("solution"):
+        self.solutionFinal = []
+        if "solution" in lbParamDict:
             self.firstRun = False
+            self.solutionFinal = lbParamDict["solution"]
         else:
             self.firstRun = True
-        self.lbMethod = lbParamDict.get("method", "tripBasedLP")
+        self.lbMethod = lbParamDict.get("method", "screenlineBasedLP")
         self.value = lbParamDict.get("value",0)
         self.newConstraint = lbParamDict.get("newConstraint",(0,0,0))
         self.markedSls = []
@@ -398,14 +407,14 @@ class lowerboundClass:
 
     def markSls(self):
         if self.firstRun:
-            self.markedSls = [range(screenlineNames.size)]
+            self.markedSls = list(range(screenlineNames.size))
         else:
             side, tourID, value = self.newConstraint
             self.markedSls = [slIdx for slIdx in aTS._getrow(tourID).indices]
 
     def bound(self):
-        if self.lbMethod == "tripBasedLP":
-            self.tripBasedLPBound()
+        if self.lbMethod == "screenlineBasedLP":
+            self.screenlineBasedLPBound()
         else:
             print(f"The lowerbound method '{self.lbMethod}' is not supported")
 
@@ -421,54 +430,120 @@ class lowerboundClass:
         self.value = value
         return solCounts
 
-    def tripBasedLPBound(self):
+
+
+
+
+    def screenlineBasedLPBound(self):
+        objVal = 0
+        if not self.solutionFinal:
+            self.solutionFinal = aTS.copy()
+
+        # Prepare arguments for each slIdx
+        tasks = [(self.listMakerSls(slIdx)) for slIdx in self.markedSls]
+
+        # Use multiprocessing.Pool to parallelize the processing of trips
+        with Pool() as pool:
+            # Map each task to a process in the pool and gather results
+            results = pool.map(process_trip, tasks)
+
+        # Update solutionFinal and accumulate objVal with results
+        dataList = []
+        rowList = []
+        colList = []
+        for slIdx, tourOrder, slSol, slVal in results:
+            objVal += slVal
+            dataList += slSol
+            rowList += [slIdx]*len(tourOrder)
+            colList += tourOrder
+        self.solutionFinal = scipy.sparse.csr_matrix((dataList, (rowList, colList)))
+
+        self.value = objVal
+        # objVal = 0
+        # if not self.solutionFinal:
+        #     self.solutionFinal = aTS.copy()
+        # for slIdx in self.markedSls:
+        #     tourOrder, slSol, slVal = self.optimizeTrip(slIdx)
+        #     objVal += slVal
+        #     for tourIdx in range(len(tourOrder)):
+        #         self.solutionFinal[tourOrder[tourIdx],slIdx] = slSol[tourIdx]
+        # self.value = objVal
+
+
+    def listMakerSls(self, slIdx):
+        count = cl[slIdx]
+        tourRow = aST._getrow(slIdx)
+        columnList = tourRow.indices
+        n = len(columnList)
+        valueList = [tComp[tourIdx] / (tp[tourIdx] * tourRow[0, tourIdx]) for tourIdx in columnList]
+        ascendingDensities = sorted(range(n), key=lambda k: valueList[k])
+        ascendingDensitiesKeys = [columnList[idx] for idx in ascendingDensities]
+        curSol = [self.solution[tourIdx] for tourIdx in ascendingDensitiesKeys]
+        influence = [tourRow[0, tourIdx] for tourIdx in ascendingDensitiesKeys]
+        tbwLocal = [tbw[tourIdx] for tourIdx in ascendingDensitiesKeys]
+        tCompLocal = [tComp[tourIdx] for tourIdx in ascendingDensitiesKeys]
+        ubVecLocal = [self.ubVector[tourIdx]for tourIdx in ascendingDensitiesKeys]
+        lbVecLocal = [self.lbVector[tourIdx] for tourIdx in ascendingDensitiesKeys]
+        return (count, n, ascendingDensities, ascendingDensitiesKeys, curSol, influence, tbwLocal, tCompLocal,
+                ubVecLocal, lbVecLocal, slIdx)
+
+    @staticmethod
+    def optimizeTrip(paramsInput):
         Linear = True
-        for slIdx in self.markedSls:
-            count = cl[slIdx]
-            tourRow = aST._getrow(slIdx)
-            columnList = [tourRow.indices]
-            valueList = [tComp[tourIdx]/(tp[tourIdx]*tourValue) for tourIdx, tourValue in tourRow.items()]
-            DecendingDensities = sorted(columnList, key=lambda k: valueList[k], reverse=True)
-            curSol = [self.lbVector[tourIdx] for tourIdx in DecendingDensities]
-            curCount = sum()
+        (count, n, ascendingDensities, ascendingDensitiesKeys, curSol, influence, tbwLocal, tCompLocal,
+         ubVecLocal, lbVecLocal, slIdx) = paramsInput
+        curCount = sum(curSol[tourIdx] * influence[tourIdx] for tourIdx in range(n))
+
+        if curCount < count:
+            for tourIdx in range(n):
+                ubTour = ubVecLocal[tourIdx]
+                while curSol[tourIdx] < ubTour:
+                    if curCount + influence[tourIdx] < count:
+                        curCount += influence[tourIdx]
+                        curSol[tourIdx] += 1
+                    else:
+                        if Linear:
+                            curSol[tourIdx] += influence[tourIdx] / (count - curCount)
+                            return ascendingDensitiesKeys, curSol, sum(abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
+                                                                   for tourIdx in range(n))
+                        else:
+                            if curCount + influence[tourIdx]-count + tCompLocal[tourIdx] < count-curCount:
+                                curCount += influence[tourIdx]
+                                curSol[tourIdx] += 1
+                                return ascendingDensitiesKeys, curSol, curCount -count + sum(
+                                    abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
+                                    for tourIdx in range(n))
+                            else:
+                                return ascendingDensitiesKeys, curSol,count-curCount + sum(
+                                    abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
+                                    for tourIdx in range(n))
 
 
-            interceptValue = interceptDF.at[OD[0], OD[1]]
-            tourIDList = self.solution[OD[0]][OD[1]].keys()
-            tempSolution = [self.lbVector[tourID] for tourID in tourIDList]
-            upperBounds = [self.ubVector[tourID] for tourID in tourIDList]
-            probList = [toursDF.at[tourID, "prob_auto"] for tourID in tourIDList]
-            n = len(probList)
-            # the two list provide the order in which the tours should be handled:
-            # if the probabilities are [0.1, 0.5, 0.25], the order will be 1->3->2->2->3->1, the first pass is to raise
-            # the coefficients to one, the second is to raise it past 1
-            ascendingProbIndices = sorted(range(n), key=lambda k: probList[k])
-            descendingProbIndices = [ascendingProbIndices[-1 - i] for i in range(n)]
-            tempValue = sum(probList[tourID] * tempSolution[tourID] for tourID in tourIDList)
-            tempDifference = interceptValue - tempValue
-            orderIndex = 0
-            # reduce the local difference to 0, first raising to the local solution to 1, then past 1.
-            while tempDifference > 0 and orderIndex < 2 * n:
-                if orderIndex < n:
-                    currentIndex = ascendingProbIndices[orderIndex]
-                    currentCoefficient = tempSolution[currentIndex]
-                    if currentCoefficient < 1 <= upperBounds[currentIndex]:
-                        currentProbability = probList[currentIndex]
-                        coefficientIncrease = min(tempDifference / currentProbability, 1 - currentCoefficient)
-                        tempSolution[currentIndex] += coefficientIncrease
-                        tempDifference -= coefficientIncrease * currentProbability
-                        tempValue += coefficientIncrease * currentProbability
-                else:
-                    currentIndex = descendingProbIndices[orderIndex - n]
-                    currentCoefficient = tempSolution[currentIndex]
-                    currentProbability = probList[currentIndex]
-                    coefficientIncrease = min(tempDifference / currentProbability,
-                                              upperBounds[currentIndex] - currentCoefficient)
-                    tempSolution[currentIndex] += coefficientIncrease
-                    tempDifference -= coefficientIncrease * currentProbability
-                    tempValue += coefficientIncrease * currentProbability
-                orderIndex += 1
-        self.evaluateSolution()
+        elif curCount > count:
+            for tourIdx in range(n):
+                lbTour = lbVecLocal[tourIdx]
+                while curSol[tourIdx] > lbTour:
+                    if curCount - influence[tourIdx] > count:
+                        curCount -= influence[tourIdx]
+                        curSol[tourIdx] -= 1
+                    else:
+                        if Linear:
+                            curSol[tourIdx] -= influence[tourIdx] / (curCount - count)
+                            return ascendingDensitiesKeys, curSol, sum(abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
+                                                                   for tourIdx in range(n))
+                        else:
+                            if count + influence[tourIdx]-curCount + tCompLocal[tourIdx] < curCount-count:
+                                curCount -= influence[tourIdx]
+                                curSol[tourIdx] -= 1
+                                return ascendingDensitiesKeys, curSol, count - curCount + sum(
+                                    abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
+                                    for tourIdx in range(n))
+                            else:
+                                return ascendingDensitiesKeys, curSol, curCount-count + sum(
+                                    abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
+                                    for tourIdx in range(n))
+        return ascendingDensitiesKeys, curSol, abs(curCount - count) + sum(
+            abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx] for tourIdx in range(n))
 
 
 def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict):
@@ -509,6 +584,14 @@ if __name__ == '__main__':
         upperboundParameterDict = {}
         lowerboundParameterDict = {}
         splitInequalityParameterDict = {}
+        lowerbounder = lowerboundClass(lowerboundParameterDict)
+        initTime = time.time()
+        print(f"Created Class in {initTime - readTime:.3f} seconds")
+        lowerbounder.bound()
+        boundTime = time.time()
+        print(f"Screenline base lowerbound finished in {boundTime - initTime:.3f} seconds")
+        print(lowerbounder.value)
+        readTime = time.time()
         upperbounder = upperboundClass(upperboundParameterDict)
         initTime = time.time()
         print(f"Created Class in {initTime - readTime:.3f} seconds")

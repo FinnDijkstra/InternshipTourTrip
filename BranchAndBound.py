@@ -378,35 +378,28 @@ class upperboundClass:
 
 class lowerboundClass:
     # newConstraint = [+/- 1, tourID, value]. 1 for upperbound, -1 for lowerbound
-    def __init__(self, lbMeth="tripBasedLP", solutionDict=None, ubVector=None, lbVector=None, newConstraint=None,
-                 value=0):
-        if lbVector is None:
-            lbVector = [0] * nrOfAgents
-        if ubVector is None:
-            ubVector = [upperbound] * nrOfAgents
-        if solutionDict is None:
-            solutionDict = {origin: {destination:
-                                         {tourID: max(lbVector[tourID], 0) for tourID in
-                                          ODtupledict[origin, destination]}
-                                     for destination in zones} for origin in zones}
-            self.firstRun = True
-        else:
+    def __init__(self, lbParamDict):
+        self.lbVector = lbParamDict.get("lbVector", [0] * nrOfClusters)
+        self.ubVector = lbParamDict.get("ubVector", [upperbound * tbw[idx] for idx in range(nrOfClusters)])
+        self.solution = lbParamDict.get("solution",
+                                        [min(self.ubVector[idx], max(tbw[idx],self.lbVector[idx]))
+                                         for idx in range(nrOfClusters)])
+        if lbParamDict.has_key("solution"):
             self.firstRun = False
-        self.lbMethod = lbMeth
-        self.solution = solutionDict
-        self.value = value
-        self.lbVector = lbVector
-        self.ubVector = ubVector
-        self.newConstraint = newConstraint
+        else:
+            self.firstRun = True
+        self.lbMethod = lbParamDict.get("method", "tripBasedLP")
+        self.value = lbParamDict.get("value",0)
+        self.newConstraint = lbParamDict.get("newConstraint",(0,0,0))
         self.markedODs = []
         self.markODs()
 
     def markODs(self):
         if self.firstRun:
-            self.markedODs = [(origin, destination) for origin in zones for destination in zones]
+            self.markedODs = [range(screenlineNames.size)]
         else:
             side, tourID, value = self.newConstraint
-            self.markedODs = [OD for OD in tourODsDict[tourID]]
+            self.markedODs = [slIdx for slIdx in aTS._getrow(tourID).indices]
 
     def bound(self):
         if self.lbMethod == "tripBasedLP":
@@ -430,7 +423,10 @@ class lowerboundClass:
         self.value = value
 
     def tripBasedLPBound(self):
-        for OD in self.markedODs:
+        Linear = True
+        for slIdx in range(screenlineNames.size):
+            count = cl[slIdx]
+
 
             interceptValue = interceptDF.at[OD[0], OD[1]]
             tourIDList = self.solution[OD[0]][OD[1]].keys()

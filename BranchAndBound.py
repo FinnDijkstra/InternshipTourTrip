@@ -2,7 +2,7 @@ import json
 import time
 
 import pandas as pd
-import igraph as ig
+from multiprocessing import Pool
 import scipy
 import matplotlib.pyplot as plt
 import numpy as np
@@ -151,7 +151,7 @@ def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tour
     aOT = aTO.tocsc(copy=True).transpose()
     aSO = scipy.sparse.load_npz(sopath)
     aTS = scipy.sparse.load_npz(tspath)
-    tComp = [1/(aTS._getrow(tourIdx).indices.size) for tourIdx in range(nrOfClusters)]
+    tComp = [1/(max(1,aTS._getrow(tourIdx).indices.size)*baseWeightSum) for tourIdx in range(nrOfClusters)]
     aST = aTS.tocsc(copy=True).transpose()
     nOD = scipy.sparse.load_npz(oopath)
     nSl = scipy.sparse.load_npz(sspath)
@@ -383,22 +383,24 @@ class lowerboundClass:
     def __init__(self, lbParamDict):
         self.lbVector = lbParamDict.get("lbVector", [0] * nrOfClusters)
         self.ubVector = lbParamDict.get("ubVector", [upperbound * tbw[idx] for idx in range(nrOfClusters)])
-        self.solution = lbParamDict.get("solution",
+        self.solution = lbParamDict.get("solutionBase",
                                         [min(self.ubVector[idx], max(tbw[idx],self.lbVector[idx]))
                                          for idx in range(nrOfClusters)])
-        if lbParamDict.has_key("solution"):
+        self.solutionFinal = []
+        if "solution" in lbParamDict:
             self.firstRun = False
+            self.solutionFinal = lbParamDict["solution"]
         else:
             self.firstRun = True
-        self.lbMethod = lbParamDict.get("method", "tripBasedLP")
+        self.lbMethod = lbParamDict.get("method", "screenlineBasedLP")
         self.value = lbParamDict.get("value",0)
         self.newConstraint = lbParamDict.get("newConstraint",(0,0,0))
         self.markedSls = []
         self.markSls()
 
     def markSls(self):
-        if self.firstRun:
-            self.markedSls = [range(screenlineNames.size)]
+        if self.lbMethod == "screenlineBasedLP":
+            self.screenlineBasedLPBound()
         else:
             side, tourID, value = self.newConstraint
             self.markedSls = [slIdx for slIdx in aTS._getrow(tourID).indices]
@@ -421,7 +423,7 @@ class lowerboundClass:
         self.value = value
         return solCounts
 
-    def tripBasedLPBound(self):
+    def screenlineBasedLPBound(self):
         Linear = True
         for slIdx in self.markedSls:
             count = cl[slIdx]
@@ -430,7 +432,7 @@ class lowerboundClass:
             valueList = [tComp[tourIdx]/(tp[tourIdx]*tourValue) for tourIdx, tourValue in tourRow.items()]
             DecendingDensities = sorted(columnList, key=lambda k: valueList[k], reverse=True)
             curSol = [self.lbVector[tourIdx] for tourIdx in DecendingDensities]
-            curCount = sum()
+
 
 
             interceptValue = interceptDF.at[OD[0], OD[1]]

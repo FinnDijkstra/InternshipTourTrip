@@ -78,21 +78,38 @@ def findNeighbours(tours):
 
 
 
-if __name__ == '__main__':
-    # data = {[[O,D],[O,D]]:weight}
-    data = readToData(jsonfilename)
-    # clusters = {id:[weight, [(O,D),(O,D)]]}
-    clusters = clustersToList(data)
-    # clusters = {id:[weight, [(O,D),(O,D)], set(neighbourID), noNeighbours]}
-    # clustersOnODDict = {(O,D):[clusterID]}
-    clusters, clusterOnODDict, listOfKeys = findNeighbours(clusters)
-    clustersJson = json.dumps(clusters, indent=4)
-    clusterOnODDictStrKeys = {f"{OD}": value for OD, value in clusterOnODDict.items()}
-    clusterOnODDictJSson = json.dumps(clusterOnODDictStrKeys, indent=4)
 
-    # Writing to sample.json
-    with open("clusters.json", "w") as outfile:
-        outfile.write(clustersJson)
-    with open("clusterOnODDict.json", "w") as outfile:
-        outfile.write(clusterOnODDictJSson)
+
+if __name__ == '__main__':
+    ClusterBool = False
+    if ClusterBool:
+        # data = {[[O,D],[O,D]]:weight}
+        data = readToData(jsonfilename)
+        # clusters = {id:[weight, [(O,D),(O,D)]]}
+        clusters = clustersToList(data)
+        # clusters = {id:[weight, [(O,D),(O,D)], set(neighbourID), noNeighbours]}
+        # clustersOnODDict = {(O,D):[clusterID]}
+        clusters, clusterOnODDict, listOfKeys = findNeighbours(clusters)
+        clustersJson = json.dumps(clusters, indent=4)
+        clusterOnODDictStrKeys = {f"{OD}": value for OD, value in clusterOnODDict.items()}
+        clusterOnODDictJSson = json.dumps(clusterOnODDictStrKeys, indent=4)
+
+        # Writing to sample.json
+        with open("clusters.json", "w") as outfile:
+            outfile.write(clustersJson)
+        with open("clusterOnODDict.json", "w") as outfile:
+            outfile.write(clusterOnODDictJSson)
+    else:
+        interceptFile = "CountsV2.json.gz"
+        screenlinesFile = "ScreenlinesDiscreet.json.gz"
+        slData = readToData(screenlinesFile)
+        countData = readToData(interceptFile)
+        countData2 = {"("+key[1:-1]+")":value for key, value in countData.items()}
+        countJson = json.dumps(countData2, indent=4)
+        slData2 = {"("+key[1:-1]+")":{"("+key2[1:-1]+")":value2 for key2,value2 in value.items()} for key,value in slData.items()}
+        slJson = json.dumps(slData2, indent=4)
+        with open("CountsV2.json", "w") as outfile:
+            outfile.write(countJson)
+        with open("ScreenlinesDiscreet.json", "w") as outfile:
+            outfile.write(slJson)
 

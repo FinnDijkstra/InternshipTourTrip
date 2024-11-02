@@ -6,6 +6,7 @@ from multiprocessing import Pool
 import scipy
 import matplotlib.pyplot as plt
 import numpy as np
+import gzip
 
 
 
@@ -41,11 +42,14 @@ aSO = scipy.sparse.csr_array((1,1))
 aTS = scipy.sparse.csr_array((1,1))
 aST = scipy.sparse.csr_array((1,1))
 nOD = scipy.sparse.csr_array((1,1))
-nSl = scipy.sparse.csr_array((1,1))
+# nSl = scipy.sparse.csr_array((1,1))
 cl = []
 tbw = []
 tp = []
 tComp = []
+slMaxDiff = []
+
+
 upperbound = 5
 penalty = 1
 # maxZonerNR = int
@@ -64,6 +68,13 @@ maxZoneNR = 0
 nrOfClusters = 0
 baseWeightSum = 0
 
+def readGZJson(jsonfilename):
+    with gzip.open(jsonfilename, 'r') as file:
+        json_bytes = file.read()
+
+    json_str = json_bytes.decode('utf-8')
+    return json.loads(json_str)
+
 
 def readInModelParams(interceptPath, screenlinesUsedBool, screenlinesPath, tourDictPath, tourOnODDictPath):
     global tourDict, tourOnODDict, screenlines, counts, maxZoneNR, nrOfClusters, baseWeightSum, \
@@ -76,9 +87,10 @@ def readInModelParams(interceptPath, screenlinesUsedBool, screenlinesPath, tourD
     if screenlinesUsedBool:
         maxZoneNR = 1400
         with open(screenlinesPath, 'r') as file:
-            screenlines = json.load(file)
+            screenlinesPre = json.load(file)
         with open(interceptPath, 'r') as file:
-            counts = json.load(file)
+            counts2 = json.load(file)
+
     else:
         interceptDF = pd.read_csv(interceptPath, sep=";", header=None)
         maxZoneNR = 1400
@@ -98,15 +110,25 @@ def readInModelParams(interceptPath, screenlinesUsedBool, screenlinesPath, tourD
     nrOfClusters = len(tourOnODDict)
     baseWeightSum = sum(tourOnODDict[tour][0] for tour in tourOnODDict)
     tourNames = pd.Series(data=range(len(tourDict.keys())), index=tourDict.keys())
-    screenlineNames = pd.Series(data=range(len(screenlines.keys())), index=screenlines.keys())
+
     ODNames = pd.Series(data=range(len(tourOnODDict.keys())), index=tourOnODDict.keys())
+    if screenlinesUsedBool:
+        screenlines2 = {slID: {OD:value for OD, value in slDict.items() if OD in ODNames.index}
+                       for slID, slDict in screenlinesPre.items()}
+        slNameSet = set(screenlines2.keys()) & set(counts2.keys())
+        screenlines = {slID:screenlines2[slID] for slID in slNameSet}
+        counts = {slID:counts2[slID] for slID in slNameSet}
+    screenlineNames = pd.Series(data=range(len(screenlines.keys())), index=screenlines.keys())
+    slJson = json.dumps(screenlines, indent=4)
+    with open("ScreenlinesDiscreetV2.json", "w") as outfile:
+        outfile.write(slJson)
     return
 
 
 def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tourDictPath, tourOnODDictPath, sopath,
                        topath, tspath, oopath, sspath):
     global aTO, aOT, aSO, aTS, aST, nOD, nSl, cl, tbw, tp, maxZoneNR, nrOfClusters, baseWeightSum, ODNames, \
-        tourNames, screenlineNames, penalty, tComp
+        tourNames, screenlineNames, penalty, tComp, slMaxDiff
     sld = {}
     cd = {}
     with open(tourDictPath, 'r') as file:
@@ -154,8 +176,14 @@ def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tour
     tComp = [1/(max(1,aTS._getrow(tourIdx).indices.size)*baseWeightSum) for tourIdx in range(nrOfClusters)]
     aST = aTS.tocsc(copy=True).transpose()
     nOD = scipy.sparse.load_npz(oopath)
-    nSl = scipy.sparse.load_npz(sspath)
-    penalty = max(aTS._getrow(rowID).indices.size for rowID in range(nrOfClusters))
+    # nSl = scipy.sparse.load_npz(sspath)
+    penalties = aTS.sum(axis=1)
+    penalty = aTS.sum(axis=1).max()
+    slMaxDiffCoo = aST.max(axis=1).data
+    slMaxDiff = slMaxDiffCoo.tolist()
+
+    # penalty = max(sum(aTS[rowID, colID] for colID in aTS._getrow(rowID).indices) for rowID in range(nrOfClusters))
+    # slMaxDiff = [max(aST[rowID,colID] for colID in aST._getrow(rowID).indices) for rowID in range(screenlineNames.size)]
     return
 
 
@@ -168,7 +196,7 @@ def makeSparceAdjacencyMatrices():
     slNo = len(screenlineNames)
 
 
-    adjTourSl = scipy.sparse.csr_array((tourNo, slNo))
+
     rowList = []
     columnList = []
     valueList = []
@@ -194,12 +222,30 @@ def makeSparceAdjacencyMatrices():
                                      shape=(slNo, ODNo))
     adjTourSl = adjTourOD @ (adjSlOD.transpose())
     neighboursOD = adjTourOD @ (adjTourOD.transpose())
-    neighboursSl = adjTourSl @ (adjTourSl.transpose())
+    # neighboursSl = adjTourSl @ (adjTourSl.transpose())
+    # data = []
+    # columnlist = []
+    # rowlist = []
+    # for screenlineIdx in range(tourNames.size):
+    #     toursInScreenline = adjTourSl._getrow(screenlineIdx)
+    #     neighboursOfTour = adjTourSl @ toursInScreenline.transpose()
+    #     rowlist += [screenlineIdx]*neighboursOfTour.size
+    #     columnlist += neighboursOfTour.indices.tolist()
+    #     data += neighboursOfTour.data.tolist()
+    #     x = 1
+    #     # for screenlineIdx2 in range(tourNames.size):
+    #     #     toursInScreenline2 = adjTourSl._getrow(screenlineIdx2)
+    #     #     value = (toursInScreenline @ toursInScreenline2.transpose())[0,0]
+    #     #     if value > 0:
+    #     #         data.append(value)
+    #     #         columnlist.append(screenlineIdx2)
+    #     #         rowlist.append(screenlineIdx2)
+    # neighboursSl = scipy.sparse.csr_array((data,(rowlist, columnlist)))
     scipy.sparse.save_npz("adjTourOD",adjTourOD)
     scipy.sparse.save_npz("adjSlOD", adjSlOD)
     scipy.sparse.save_npz("adjTourSl", adjTourSl)
     scipy.sparse.save_npz("neighboursOD", neighboursOD)
-    scipy.sparse.save_npz("neighboursSl", neighboursSl)
+    # scipy.sparse.save_npz("neighboursSl", neighboursSl)
     return
 
 
@@ -222,7 +268,7 @@ class upperboundClass:
         ubMethodParameters = ubParamDict.get("method", {})
         if not ubMethodParameters:
             if ubMeth == "tabooSearch":
-                ubMethodParameters = {"maxDepth": 150000, "tabooLength": 100, "maxNoImprovement": 80}
+                ubMethodParameters = {"maxDepth": 1000, "tabooLength": 100, "maxNoImprovement": 80}
         if not solution:
             solution = [max(lbVector[tourID], min(tbw[tourID], ubVector[tourID]))
                                      for tourID in range(nrOfClusters)]
@@ -266,6 +312,9 @@ class upperboundClass:
         depth = 0
         lastImprovement = 0
         sumOfSizes = 0
+        sumOfPotentialSizes = 0
+        sumOfMinTimes = 0
+        sumOfUpdateTimes = 0
         tabooList = []
         improvementMoment = 0
         improvementCount = 0
@@ -278,28 +327,38 @@ class upperboundClass:
         while (depth < self.ubMethodParameters["maxDepth"] and
                lastImprovement < self.ubMethodParameters["maxNoImprovement"]):
             # find best improvement
+            minStartTime = time.time()
             nextStepValue = min(changeDiffList)
             nextStepIdx = changeDiffList.index(nextStepValue)
             nextStepTIdx = nextStepIdx % nrOfClusters
             nextStepSideBase = nextStepIdx // nrOfClusters
             nextStepSide = 2*nextStepSideBase-1
+            sumOfMinTimes += time.time() - minStartTime
 
 
             # update taboolist and start list of steps that need to be checked
             tabooIdx = nextStepIdx + nrOfClusters % nrOfClusters*2
-            updateDiffs = {nextStepTIdx}
+            # updateDiffs = {nextStepTIdx}
             if tabooIdx in tabooList:
                 tabooList.remove(tabooIdx)
+                changeDiffList[tabooIdx] -= penalty
             tabooList.append(tabooIdx)
+            changeDiffList[tabooIdx] += penalty
             if len(tabooList) >= self.ubMethodParameters["tabooLength"]:
-                updateDiffs.add(tabooList.pop(0) % nrOfClusters)
-
+                removedTaboo = tabooList.pop(0)
+                changeDiffList[removedTaboo] -= penalty
+                # updateDiffs.add(removedTaboo % nrOfClusters)
+            updateStartTime = time.time()
+            sizes, potentialSizes = self.updateCurrentSolution(solCounts, nextStepSide, nextStepTIdx, changeDiffList)
+            sumOfUpdateTimes += time.time() - updateStartTime
+            sumOfSizes += sizes
+            sumOfPotentialSizes += potentialSizes
             # update current Solution
             tempValue += nextStepValue
             curWeights[nextStepTIdx] += nextStepSide
-            for screenlineIdx in aTS._getrow(nextStepTIdx).indices:
-                solCounts[screenlineIdx] += nextStepSide
-            updateDiffs.update(nSl._getrow(nextStepTIdx).indices)
+            # for screenlineIdx in aTS._getrow(nextStepTIdx).indices:
+            #     solCounts[screenlineIdx] += nextStepSide * aTS[nextStepTIdx, screenlineIdx]
+            #     updateDiffs.update(aST._getrow(screenlineIdx).indices)
 
             # check if we found a new best solution
             if tempValue < minValue:
@@ -313,19 +372,21 @@ class upperboundClass:
                     timeNow = time.time()
                     timeList.append(timeNow-timeBeforeLoop)
                     valueList.append(minValue)
-                    print(f"{minValue:.4f} ({timeNow-timeBeforeLoop:.3f}s, average set size {sumOfSizes/depth:.1f}, {
+                    print(f"{minValue:.4f} (best step/ updating/ total times: {sumOfMinTimes:.3f}s/ {
+                            sumOfUpdateTimes:.3f}s/ {timeNow-timeBeforeLoop:.3f}s, average set size {
+                            sumOfSizes/depth:.1f} (without logic {sumOfPotentialSizes/depth:.1f}), \n {
                             improvementCount*100/(depth+1):.3f}% of steps are improvements, {-improvementCount+depth+1} non improvements steps)")
             else:
                 lastImprovement += 1
 
-            # update change vector
-            for tourIdx in updateDiffs:
-                for sideBase in [0,1]:
-                    changeDiffList[tourIdx+sideBase*nrOfClusters] = (
-                        self.calculatePenalizedImprovement(curWeights, tourIdx, sideBase, solCounts, tabooList))
-
-            # incriment depth
-            sumOfSizes += 2*len(updateDiffs)
+            # # update change vector
+            # for tourIdx in updateDiffs:
+            #     for sideBase in [0,1]:
+            #         changeDiffList[tourIdx+sideBase*nrOfClusters] = (
+            #             self.calculatePenalizedImprovement(curWeights, tourIdx, sideBase, solCounts, tabooList))
+            #
+            # # incriment depth
+            # sumOfSizes += 2*len(updateDiffs)
             depth += 1
         plt.plot(timeList, valueList)
         print(depth)
@@ -361,6 +422,8 @@ class upperboundClass:
     def calcScreenlineDiff(self, weights, screenlineName):
         for OD in screenlines[screenlineName]:
             return
+
+
     # depreciated, use calcSceenlineDiff instead, supports
     @staticmethod
     def calcODweight(weights, origin, destination):
@@ -369,20 +432,80 @@ class upperboundClass:
                     for tourID in agents)
         return value
 
+
     def evaluateSolution(self, solutionList=None):
         sT = time.time()
         if solutionList is None:
             solutionList = self.solution
-        value = sum(abs(solutionList[idx] - tbw[idx]) for idx in range(nrOfClusters)) / baseWeightSum
-        solCounts = [0]*screenlineNames.size
-        for screenlineIdx in range(screenlineNames.size):
-            toursInScreenline = aST._getrow(screenlineIdx).indices
-            solCount = sum(solutionList[tour] for tour in toursInScreenline)
-            solCounts[screenlineIdx] = solCount
-            value += abs(solCount - cl[screenlineIdx])
+        value = np.sum(np.abs(solutionList - np.array(tbw))) / baseWeightSum
+        # solCounts = [0]*screenlineNames.size
+        # for screenlineIdx in range(screenlineNames.size):
+        #     toursInScreenline = aST._getrow(screenlineIdx).indices
+        #     solCount = sum(solutionList[tour] for tour in toursInScreenline)
+        #     solCounts[screenlineIdx] = solCount
+        #     value += abs(solCount - cl[screenlineIdx])
+        solCounts = aST.dot(np.array(solutionList))
+
+        absDiff = np.abs(solCounts-np.array(cl))
+        value += absDiff.sum()
         eT = time.time()
         print(f"Evaluated Solution in {eT-sT:.3f} seconds")
         return value, solCounts
+
+    def updateCurrentSolution(self, solCounts, nextStepSide, nextStepTIdx, changeDiffList):
+        screenlinesAffected = aTS._getrow(nextStepTIdx)
+        toursUpdated = 0
+        potentialTours = 0
+        for slIdx in screenlinesAffected.indices:
+            countSL = cl[slIdx]
+            solSL = solCounts[slIdx]
+            stepInfluenceSl = screenlinesAffected[0, slIdx]
+            localSlMaxDiff = slMaxDiff[slIdx]
+            prevDiff = countSL - solSL
+            newDiff = -prevDiff + stepInfluenceSl*nextStepSide
+            potentialTours += 2 * aST._getrow(slIdx).indices.size
+            # if the below statement is false, (1) the new solution is too far below the count to need updates or
+            # (2) the old solution is too far above.
+            # This is under the assumption of increase in solution, decrease the same but reverse
+            if (localSlMaxDiff + nextStepSide * newDiff > 0) and (localSlMaxDiff + nextStepSide * prevDiff > 0):
+                compFactor = abs(prevDiff) - abs(newDiff)
+                # (positive increase) sol is in (count - tourWeight, count + maxWeightOfTour)
+                # (negative increase) sol is in (count - maxWeightOfTour, count + tourWeight)
+                if nextStepSide * newDiff > 0:
+                    # the tours in the reverse direction of the step need to be updated
+                    checkSide = -1*nextStepSide
+                    checkIdxFactor = ((checkSide + 1) // 2) * nrOfClusters
+                    rowVector = aST._getrow(slIdx)
+                    for checkTour in rowVector.indices:
+                        checkTourWeight = rowVector[0, checkTour]
+                        tDelta = checkTourWeight*checkSide
+                        # tTotalDelta = (|newSol-count+tDelta|-|newSol-count|)-(|oldSol-count+tDelta|-|oldSol-count|)
+                        tTotalDelta = (compFactor + abs(tDelta+newDiff) - abs(tDelta-prevDiff))
+                        if tTotalDelta != 0:
+                            changeDiffList[checkTour+checkIdxFactor] += tTotalDelta
+                            toursUpdated += 1
+
+                # (positive increase) sol is in (count - tourWeight - maxWeightOfTour, count)
+                # (negative increase) sol is in (count, count + tourWeight + maxWeightOfTour)
+                if nextStepSide * prevDiff > 0:
+                    # the tours in the same direction of the step need to be updated
+                    checkSide = nextStepSide
+                    checkIdxFactor = ((checkSide+1)//2)*nrOfClusters
+                    rowVector = aST._getrow(slIdx)
+                    for checkTour in rowVector.indices:
+                        checkTourWeight = rowVector[0, checkTour]
+                        tDelta = checkTourWeight * checkSide
+                        # tTotalDelta = (|newSol-count+tDelta|-|newSol-count|)-(|oldSol-count+tDelta|-|oldSol-count|)
+                        tTotalDelta = (compFactor + abs(tDelta + newDiff) - abs(tDelta - prevDiff))
+                        if tTotalDelta != 0:
+                            changeDiffList[checkTour + checkIdxFactor] += tTotalDelta
+                            toursUpdated += 1
+
+            solCounts[slIdx] += stepInfluenceSl*nextStepSide
+        return toursUpdated, potentialTours
+
+
+
 
 
 class lowerboundClass:
@@ -393,13 +516,16 @@ class lowerboundClass:
         self.solution = lbParamDict.get("solutionBase",
                                         [min(self.ubVector[idx], max(tbw[idx],self.lbVector[idx]))
                                          for idx in range(nrOfClusters)])
-        self.solutionFinal = []
+        self.solutionFinal = aST.multiply(np.array(self.solution)).tocsc().transpose()
         if "solution" in lbParamDict:
             self.firstRun = False
             self.solutionFinal = lbParamDict["solution"]
         else:
             self.firstRun = True
         self.lbMethod = lbParamDict.get("method", "screenlineBasedLP")
+        self.extraParams = lbParamDict.get("extraParams", {})
+        if self.lbMethod == "screenlineBasedLP" and not self.extraParams:
+            self.extraParams["ValueMatrix"] = aST.power(-1).multiply(np.divide(np.array(tComp), np.array(tp))).tocsr()
         self.value = lbParamDict.get("value",0)
         self.newConstraint = lbParamDict.get("newConstraint",(0,0,0))
         self.markedSls = []
@@ -420,13 +546,24 @@ class lowerboundClass:
 
     def evaluateSolution(self):
         solCounts = []
-        for slIdx in range(screenlineNames.size):
-            slCount = 0
-            for tourIdx, weight in aST._getrow(slIdx):
-                slCount += weight * self.solution[tourIdx]
-            solCounts.append(slCount)
-        value = sum(abs(solCounts[slIdx]-cl[slIdx]) for slIdx in range(screenlineNames.size))
-        value += sum(abs(self.solution[tourIdx]-tbw[tourIdx]) for tourIdx in range(nrOfClusters))/baseWeightSum
+        solCountMatrix = aTS.multiply(self.solutionFinal)
+        solCount2 = solCountMatrix.sum(axis=0)
+        # for slIdx in range(screenlineNames.size):
+        #     slCount = 0
+        #     for tourIdx, weight in aST._getrow(slIdx):
+        #         slCount += weight * self.solution[tourIdx]
+        #     solCounts.append(slCount)
+        clArray = np.array(cl)
+        value = np.sum(np.abs(solCount2-clArray))
+        # value = sum(abs(solCounts[slIdx]-cl[slIdx]) for slIdx in range(screenlineNames.size))
+        revTbw = np.divide(np.ones(nrOfClusters), np.array(tbw))
+
+        devMatrix = self.solutionFinal.copy().transpose()
+        nz = devMatrix.nonzero()
+        devMatrix[nz] -= np.array(tbw)[nz[0]]
+        absdevMatrix = devMatrix.multiply(devMatrix.sign()).multiply(np.array(tComp))
+        value += absdevMatrix.sum()
+        # value += sum(abs(self.solution[tourIdx]-tbw[tourIdx])*tComp[tourIdx] for tourIdx in range(nrOfClusters))
         self.value = value
         return solCounts
 
@@ -436,16 +573,27 @@ class lowerboundClass:
 
     def screenlineBasedLPBound(self):
         objVal = 0
-        if not self.solutionFinal:
-            self.solutionFinal = aTS.copy()
+        # if not self.solutionFinal:
+        #     self.solutionFinal = aTS.copy()
 
         # Prepare arguments for each slIdx
-        tasks = [(self.listMakerSls(slIdx)) for slIdx in self.markedSls]
-
-        # Use multiprocessing.Pool to parallelize the processing of trips
-        with Pool() as pool:
-            # Map each task to a process in the pool and gather results
-            results = pool.map(process_trip, tasks)
+        startPrepTime = time.time()
+        tasks = [list(self.listMakerSls(slIdx)) for slIdx in self.markedSls]
+        print(f"created tasklist in {time.time() - startPrepTime:.2f} seconds")
+        sumOfTimes = 0
+        results = []
+        for task in tasks:
+            startTimeSl = time.time()
+            results.append([task[-1]] + list(self.optimizeTrip(task)))
+            endTimeSl = time.time()
+            sumOfTimes += (endTimeSl - startTimeSl)
+            if (task[-1]+1) % 100 == 0:
+                print(f"average time per screenline is {sumOfTimes/(task[-1]+1)}")
+        # results = [(task[-1],) + self.optimizeTrip(task) for task in tasks]
+        # # Use multiprocessing.Pool to parallelize the processing of trips
+        # with Pool() as pool:
+        #     # Map each task to a process in the pool and gather results
+        #     results = pool.map(process_trip, tasks)
 
         # Update solutionFinal and accumulate objVal with results
         dataList = []
@@ -453,10 +601,10 @@ class lowerboundClass:
         colList = []
         for slIdx, tourOrder, slSol, slVal in results:
             objVal += slVal
-            dataList += slSol
+            dataList += slSol.tolist()
             rowList += [slIdx]*len(tourOrder)
-            colList += tourOrder
-        self.solutionFinal = scipy.sparse.csr_matrix((dataList, (rowList, colList)))
+            colList += tourOrder.tolist()
+        self.solutionFinal = scipy.sparse.csc_matrix((dataList, (rowList, colList))).transpose()
 
         self.value = objVal
         # objVal = 0
@@ -471,28 +619,44 @@ class lowerboundClass:
 
 
     def listMakerSls(self, slIdx):
+
         count = cl[slIdx]
+
         tourRow = aST._getrow(slIdx)
+
         columnList = tourRow.indices
-        n = len(columnList)
-        valueList = [tComp[tourIdx] / (tp[tourIdx] * tourRow[0, tourIdx]) for tourIdx in columnList]
+        n = columnList.size
+        # startList = time.time()
+        valueList = self.extraParams["ValueMatrix"][[slIdx],columnList].tolist()
+        # valueList = [tComp[tourIdx] / (tp[tourIdx] * tourRow[0, tourIdx]) for tourIdx in columnList]
+        # startSort = time.time()
         ascendingDensities = sorted(range(n), key=lambda k: valueList[k])
-        ascendingDensitiesKeys = [columnList[idx] for idx in ascendingDensities]
-        curSol = [self.solution[tourIdx] for tourIdx in ascendingDensitiesKeys]
-        influence = [tourRow[0, tourIdx] for tourIdx in ascendingDensitiesKeys]
-        tbwLocal = [tbw[tourIdx] for tourIdx in ascendingDensitiesKeys]
-        tCompLocal = [tComp[tourIdx] for tourIdx in ascendingDensitiesKeys]
-        ubVecLocal = [self.ubVector[tourIdx]for tourIdx in ascendingDensitiesKeys]
-        lbVecLocal = [self.lbVector[tourIdx] for tourIdx in ascendingDensitiesKeys]
-        return (count, n, ascendingDensities, ascendingDensitiesKeys, curSol, influence, tbwLocal, tCompLocal,
-                ubVecLocal, lbVecLocal, slIdx)
+        # endSort = time.time()
+        ascendingDensitiesKeys = columnList[ascendingDensities]
+        curSol = np.array(self.solution)[ascendingDensitiesKeys]
+        influence = aST[[slIdx],ascendingDensitiesKeys]
+        tbwLocal = np.array(tbw)[ascendingDensitiesKeys]
+        tCompLocal = np.array(tComp)[ascendingDensitiesKeys]
+        ubVecLocal = np.array(self.ubVector)[ascendingDensitiesKeys]
+        lbVecLocal = np.array(self.lbVector)[ascendingDensitiesKeys]
+        # ascendingDensitiesKeys = [columnList[idx] for idx in ascendingDensities]
+        # curSol = [self.solution[tourIdx] for tourIdx in ascendingDensitiesKeys]
+        # influence = [tourRow[0, tourIdx] for tourIdx in ascendingDensitiesKeys]
+        # tbwLocal = [tbw[tourIdx] for tourIdx in ascendingDensitiesKeys]
+        # tCompLocal = [tComp[tourIdx] for tourIdx in ascendingDensitiesKeys]
+        # ubVecLocal = [self.ubVector[tourIdx]for tourIdx in ascendingDensitiesKeys]
+        # lbVecLocal = [self.lbVector[tourIdx] for tourIdx in ascendingDensitiesKeys]
+        # endList = time.time()
+        # print(f"({(startSort-startList):.3f})/ ({(endSort-startSort):.3f})/ ({(endList-endSort):.3f}) total({(endList-startList):.3f}) list size {n}")
+        return [count, n, ascendingDensities, ascendingDensitiesKeys, curSol, influence, tbwLocal, tCompLocal,
+                ubVecLocal, lbVecLocal, slIdx]
 
     @staticmethod
     def optimizeTrip(paramsInput):
         Linear = True
-        (count, n, ascendingDensities, ascendingDensitiesKeys, curSol, influence, tbwLocal, tCompLocal,
-         ubVecLocal, lbVecLocal, slIdx) = paramsInput
-        curCount = sum(curSol[tourIdx] * influence[tourIdx] for tourIdx in range(n))
+        [count, n, ascendingDensities, ascendingDensitiesKeys, curSol, influence, tbwLocal, tCompLocal,
+         ubVecLocal, lbVecLocal, slIdx] = paramsInput
+        curCount = curSol.dot(influence)
 
         if curCount < count:
             for tourIdx in range(n):
@@ -503,9 +667,8 @@ class lowerboundClass:
                         curSol[tourIdx] += 1
                     else:
                         if Linear:
-                            curSol[tourIdx] += influence[tourIdx] / (count - curCount)
-                            return ascendingDensitiesKeys, curSol, sum(abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
-                                                                   for tourIdx in range(n))
+                            curSol[tourIdx] += (count - curCount) / influence[tourIdx]
+                            return ascendingDensitiesKeys, curSol, np.sum(np.abs(curSol - tbwLocal).dot(tCompLocal))
                         else:
                             if curCount + influence[tourIdx]-count + tCompLocal[tourIdx] < count-curCount:
                                 curCount += influence[tourIdx]
@@ -528,9 +691,8 @@ class lowerboundClass:
                         curSol[tourIdx] -= 1
                     else:
                         if Linear:
-                            curSol[tourIdx] -= influence[tourIdx] / (curCount - count)
-                            return ascendingDensitiesKeys, curSol, sum(abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
-                                                                   for tourIdx in range(n))
+                            curSol[tourIdx] -= (curCount - count) / influence[tourIdx]
+                            return ascendingDensitiesKeys, curSol, np.sum(np.abs(curSol - tbwLocal).dot(tCompLocal))
                         else:
                             if count + influence[tourIdx]-curCount + tCompLocal[tourIdx] < curCount-count:
                                 curCount -= influence[tourIdx]
@@ -542,8 +704,7 @@ class lowerboundClass:
                                 return ascendingDensitiesKeys, curSol, curCount-count + sum(
                                     abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx]
                                     for tourIdx in range(n))
-        return ascendingDensitiesKeys, curSol, abs(curCount - count) + sum(
-            abs(curSol[tourIdx] - tbwLocal[tourIdx]) * tCompLocal[tourIdx] for tourIdx in range(n))
+        return ascendingDensitiesKeys, curSol, abs(curCount - count) + np.sum(np.abs(curSol - tbwLocal).dot(tCompLocal))
 
 
 def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict):
@@ -557,18 +718,18 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict):
 if __name__ == '__main__':
     parametersType = 2
     if parametersType == 1:
-        interceptFile = "NormObservedMatrix.txt"
-        screenlinesUsed = False
-        screenlinesFile = "NormObservedMatrix.txt"
+        interceptFile = "CountsV2.json"
+        screenlinesUsed = True
+        screenlinesFile = "ScreenlinesDiscreet.json"
         tourDictFile = "clusters.json"
         tourOnODDictFile = "clusterOnODDict.json"
 
         readInModelParams(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile)
         makeSparceAdjacencyMatrices()
     else:
-        interceptFile = "NormObservedMatrix.txt"
-        screenlinesUsed = False
-        screenlinesFile = "NormObservedMatrix.txt"
+        interceptFile = "CountsV2.json"
+        screenlinesUsed = True
+        screenlinesFile = "ScreenlinesDiscreetV2.json"
         tourDictFile = "clusters.json"
         tourOnODDictFile = "clusterOnODDict.json"
         adjsofile = "adjSlOD.npz"
@@ -579,19 +740,10 @@ if __name__ == '__main__':
         startTime = time.time()
         readInModelParams2(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile,adjsofile,
                            adjtofile, adjtsfile, neighofile, neighsfile)
+        upperboundParameterDict = {}
+
         readTime = time.time()
         print(f"Read parameters in {readTime - startTime:.3f} seconds")
-        upperboundParameterDict = {}
-        lowerboundParameterDict = {}
-        splitInequalityParameterDict = {}
-        lowerbounder = lowerboundClass(lowerboundParameterDict)
-        initTime = time.time()
-        print(f"Created Class in {initTime - readTime:.3f} seconds")
-        lowerbounder.bound()
-        boundTime = time.time()
-        print(f"Screenline base lowerbound finished in {boundTime - initTime:.3f} seconds")
-        print(lowerbounder.value)
-        readTime = time.time()
         upperbounder = upperboundClass(upperboundParameterDict)
         initTime = time.time()
         print(f"Created Class in {initTime - readTime:.3f} seconds")
@@ -599,6 +751,26 @@ if __name__ == '__main__':
         boundTime = time.time()
         print(f"Taboosearch finished in {boundTime - initTime:.3f} seconds")
         print(upperbounder.value)
+        readTime = time.time()
+
+        lowerboundParameterDict = {"lbVector":upperbounder.solution, "ubVector":upperbounder.solution}
+        # lowerboundParameterDict = {}
+        splitInequalityParameterDict = {}
+        lowerbounder = lowerboundClass(lowerboundParameterDict)
+        initTime = time.time()
+        lowerbounder.evaluateSolution()
+        print(lowerbounder.value)
+        print(f"Created Class in {initTime - readTime:.3f} seconds")
+        lowerbounder.bound()
+        boundTime = time.time()
+        print(f"Screenline base lowerbound finished in {boundTime - initTime:.3f} seconds")
+        print(lowerbounder.value)
+        lowerbounder.evaluateSolution()
+        print(lowerbounder.value)
+        copySol = lowerbounder.solutionFinal.copy()
+        nz = copySol.nonzero()
+        copySol[nz] -= np.array(lowerbounder.solution)[nz[0]]
+        print(copySol[copySol.nonzero()])
         plt.show()
         branchAndBoundParameterDict = {}
 

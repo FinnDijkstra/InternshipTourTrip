@@ -217,7 +217,7 @@ def makeSparceAdjacencyMatrices():
         for ODIdx in ODIdxList:
             rowList2.append(slIdx)
             columnList2.append(ODIdx)
-            valueList2.append(1.0)
+            valueList2.append(screenlines[slID][ODNames.index[ODIdx]])
     adjSlOD = scipy.sparse.csr_array((np.array(valueList2), (np.array(rowList2), np.array(columnList2))),
                                      shape=(slNo, ODNo))
     adjTourSl = adjTourOD @ (adjSlOD.transpose())
@@ -268,7 +268,7 @@ class upperboundClass:
         ubMethodParameters = ubParamDict.get("method", {})
         if not ubMethodParameters:
             if ubMeth == "tabooSearch":
-                ubMethodParameters = {"maxDepth": 1000, "tabooLength": 100, "maxNoImprovement": 80}
+                ubMethodParameters = {"maxDepth": 150000, "tabooLength": 100, "maxNoImprovement": 80, "maxTime": 600}
         if not solution:
             solution = [max(lbVector[tourID], min(tbw[tourID], ubVector[tourID]))
                                      for tourID in range(nrOfClusters)]
@@ -319,13 +319,15 @@ class upperboundClass:
         improvementMoment = 0
         improvementCount = 0
         timeList = [0]
+        faults = 1
         valueList = [minValue]
         timeBeforeLoop = time.time()
         print(f"Created difference vector in {timeBeforeLoop - timeBeforeDiff:.3f} seconds")
         timeNow = time.time()
         print(f"{minValue:.4f} ({timeNow - timeBeforeLoop:.3f}s)")
         while (depth < self.ubMethodParameters["maxDepth"] and
-               lastImprovement < self.ubMethodParameters["maxNoImprovement"]):
+               lastImprovement < self.ubMethodParameters["maxNoImprovement"]
+               and time.time() < timeBeforeLoop+self.ubMethodParameters["maxTime"]):
             # find best improvement
             minStartTime = time.time()
             nextStepValue = min(changeDiffList)
@@ -366,9 +368,13 @@ class upperboundClass:
                 minWeights = curWeights
                 lastImprovement = 0
                 improvementCount += 1
-
+                # val, sol = self.evaluateSolution(curWeights)
+                # if abs(val - minValue) > 0.1:
+                #     print("non matching values")
+                #     faults += 1
                 if depth-improvementMoment >= 1000:
                     improvementMoment = depth
+                    minValue = self.evaluateSolution(minWeights)[0]
                     timeNow = time.time()
                     timeList.append(timeNow-timeBeforeLoop)
                     valueList.append(minValue)
@@ -402,10 +408,19 @@ class upperboundClass:
         tempDifference = 1.0 / baseWeightSum
         if changeSide*weights[changeIdx] < changeSide*tbw[changeIdx]:
             tempDifference *= -1
-        for screenlineIdx in aTS._getrow(changeIdx).indices:
-            curAbs = abs(solCounts[screenlineIdx]-cl[screenlineIdx])
-            newAbs = abs(solCounts[screenlineIdx]+changeSide-cl[screenlineIdx])
-            tempDifference += newAbs-curAbs
+        weightsArray = np.array(solCounts)
+
+
+        deltaSLArray = aTS._getrow(changeIdx).toarray()[0]
+        countArray = np.array(cl)
+        diffArray = weightsArray - countArray
+        curAbs = np.linalg.norm(diffArray, ord=1)
+        newAbs = np.linalg.norm(diffArray+changeSide*deltaSLArray, ord=1)
+        tempDifference += newAbs - curAbs
+        # for screenlineIdx in aTS._getrow(changeIdx).indices:
+        #     curAbs = abs(solCounts[screenlineIdx]-cl[screenlineIdx])
+        #     newAbs = abs(solCounts[screenlineIdx]+changeSide*aTS[changeIdx,screenlineIdx]-cl[screenlineIdx])
+        #     tempDifference += newAbs-curAbs
         if weights[changeIdx]+changeSide < self.lbVector[changeIdx] or weights[changeIdx]+changeSide > self.ubVector[changeIdx]:
             tempDifference += 16*penalty
         return tempDifference
@@ -438,6 +453,8 @@ class upperboundClass:
         if solutionList is None:
             solutionList = self.solution
         value = np.sum(np.abs(solutionList - np.array(tbw))) / baseWeightSum
+        value1 = np.sum(np.abs(solutionList - np.array(tbw))) / baseWeightSum
+        print(f"Compensation factor: {value1}")
         # solCounts = [0]*screenlineNames.size
         # for screenlineIdx in range(screenlineNames.size):
         #     toursInScreenline = aST._getrow(screenlineIdx).indices
@@ -447,6 +464,7 @@ class upperboundClass:
         solCounts = aST.dot(np.array(solutionList))
 
         absDiff = np.abs(solCounts-np.array(cl))
+        print(f"Difference intercept total: {absDiff.sum()}")
         value += absDiff.sum()
         eT = time.time()
         print(f"Evaluated Solution in {eT-sT:.3f} seconds")
@@ -516,7 +534,10 @@ class lowerboundClass:
         self.solution = lbParamDict.get("solutionBase",
                                         [min(self.ubVector[idx], max(tbw[idx],self.lbVector[idx]))
                                          for idx in range(nrOfClusters)])
-        self.solutionFinal = aST.multiply(np.array(self.solution)).tocsc().transpose()
+        self.solutionFinal = aTS.copy()
+        solArray = np.array(self.solution)
+        nz = self.solutionFinal.nonzero()
+        self.solutionFinal[nz] = solArray[nz[0]]
         if "solution" in lbParamDict:
             self.firstRun = False
             self.solutionFinal = lbParamDict["solution"]
@@ -555,13 +576,15 @@ class lowerboundClass:
         #     solCounts.append(slCount)
         clArray = np.array(cl)
         value = np.sum(np.abs(solCount2-clArray))
+        print(f"Difference intercept total: {value}")
         # value = sum(abs(solCounts[slIdx]-cl[slIdx]) for slIdx in range(screenlineNames.size))
         revTbw = np.divide(np.ones(nrOfClusters), np.array(tbw))
 
         devMatrix = self.solutionFinal.copy().transpose()
         nz = devMatrix.nonzero()
-        devMatrix[nz] -= np.array(tbw)[nz[0]]
+        devMatrix[nz] -= np.array(tbw)[nz[1]]
         absdevMatrix = devMatrix.multiply(devMatrix.sign()).multiply(np.array(tComp))
+        print(f"Compensation factor: {absdevMatrix.sum()}")
         value += absdevMatrix.sum()
         # value += sum(abs(self.solution[tourIdx]-tbw[tourIdx])*tComp[tourIdx] for tourIdx in range(nrOfClusters))
         self.value = value
@@ -751,10 +774,12 @@ if __name__ == '__main__':
         boundTime = time.time()
         print(f"Taboosearch finished in {boundTime - initTime:.3f} seconds")
         print(upperbounder.value)
+        x,y = upperbounder.evaluateSolution()
+        print(x)
         readTime = time.time()
 
-        lowerboundParameterDict = {"lbVector":upperbounder.solution, "ubVector":upperbounder.solution}
-        # lowerboundParameterDict = {}
+        # lowerboundParameterDict = {"lbVector":upperbounder.solution, "ubVector":upperbounder.solution}
+        lowerboundParameterDict = {}
         splitInequalityParameterDict = {}
         lowerbounder = lowerboundClass(lowerboundParameterDict)
         initTime = time.time()
@@ -770,7 +795,7 @@ if __name__ == '__main__':
         copySol = lowerbounder.solutionFinal.copy()
         nz = copySol.nonzero()
         copySol[nz] -= np.array(lowerbounder.solution)[nz[0]]
-        print(copySol[copySol.nonzero()])
+        # print(copySol[copySol.nonzero()])
         plt.show()
         branchAndBoundParameterDict = {}
 

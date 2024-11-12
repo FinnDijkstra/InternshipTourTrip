@@ -301,6 +301,38 @@ class upperboundClass:
         if self.newConstraint:
             self.updateSolutions(ubParamDict.get("Constraint", (0,0,0)))
 
+    @classmethod
+    def from_copy(cls, lbVector, ubVector, solution, ubMethod, ubMethodParameters,
+                  value, newConstraint, updateBool, boundNecessary, basicUpdateBool):
+        instance = cls.__new__(cls)  # Bypass __init__
+        instance.lbVector = lbVector
+        instance.ubVector = ubVector
+        instance.solution = solution
+        instance.ubMethod = ubMethod
+        instance.ubMethodParameters = ubMethodParameters
+        instance.value = value
+        instance.newConstraint = newConstraint
+        instance.updateBool = updateBool
+        instance.boundNecessary = boundNecessary
+        instance.basicUpdateBool = basicUpdateBool
+        return instance
+
+    def __deepcopy__(self, memo):
+        # Use from_copy to create a copy without __init__ processing
+        new_copy = self.from_copy(
+            lbVector=self.lbVector.copy(),
+            ubVector=self.ubVector.copy(),
+            solution=self.solution.copy(),
+            ubMethod=self.ubMethod,
+            ubMethodParameters=self.ubMethodParameters,
+            value=self.value,
+            newConstraint=self.newConstraint,
+            updateBool=self.updateBool,
+            boundNecessary=self.boundNecessary,
+            basicUpdateBool=self.basicUpdateBool
+        )
+        return new_copy
+
     def updateSolutions(self, Constraint):
         side, tourID, value = Constraint
         if side * self.solution[tourID] > side * value:
@@ -705,14 +737,10 @@ class upperboundClass:
 
 
     def newNodePrep(self, constr):
-        self.value = self.value.copy()
         if constr[0] == 1:
-            self.ubVector = self.ubVector.copy()
             self.ubVector[constr[1]] = constr[2]
         else:
-            self.lbVector = self.lbVector.copy()
             self.lbVector[constr[1]] = constr[2]
-        self.solution = self.solution.copy()
         self.updateSolutions(constr)
 
 
@@ -753,6 +781,45 @@ class lowerboundClass:
             self.prepForRun()
 
 
+    @classmethod
+    def from_copy(cls, lbVector, ubVector, solution, solutionFinal, solutionTranspose, firstRun, lbMethod, extraParams,
+                  value, newConstraint, updateBool, markedSls, basicUpdateBool):
+        instance = cls.__new__(cls)  # Bypass __init__
+        instance.lbVector = lbVector
+        instance.ubVector = ubVector
+        instance.solution = solution
+        instance.solutionFinal = solutionFinal
+        instance.solutionTranspose = solutionTranspose
+        instance.firstRun = firstRun
+        instance.lbMethod = lbMethod
+        instance.extraParams = extraParams
+        instance.value = value
+        instance.newConstraint = newConstraint
+        instance.updateBool = updateBool
+        instance.markedSls = markedSls
+        instance.basicUpdateBool = basicUpdateBool
+        return instance
+
+    def __deepcopy__(self, memo):
+        # Use from_copy to create a copy without __init__ processing
+        new_copy = self.from_copy(
+            lbVector=self.lbVector.copy(),
+            ubVector=self.ubVector.copy(),
+            solution=self.solution.copy(),
+            solutionFinal=self.solutionFinal.copy(),
+            solutionTranspose=self.solutionTranspose.copy(),
+            firstRun=self.firstRun,
+            lbMethod=self.lbMethod,
+            extraParams=self.extraParams,
+            value=self.value.copy(),
+            newConstraint=self.newConstraint,
+            updateBool=self.updateBool,
+            markedSls=self.markedSls.copy(),
+            basicUpdateBool=self.basicUpdateBool
+        )
+        return new_copy
+
+
     def prepForRun(self):
         startPrepTime = time.time()
         if measuringBool:
@@ -777,27 +844,32 @@ class lowerboundClass:
                 indices, values = getRow(self.solutionFinal, tourID)
                 # Depending on the added Constraint and the previous solution, only some screenlines need te be recalced
                 if side == 1:
-                    self.markedSls = indices[values > self.ubVector[tourID]]
+                    self.markedSls = indices[values > value]
                 else:
-                    self.markedSls = indices[values < self.lbVector[tourID]]
+                    self.markedSls = indices[values < value]
             else:
                 self.markedSls = getRow(aTS, tourID)[0]
-            for slIdx in self.markedSls:
-                self.extraParams["tasks"][slIdx][4][
-                    self.extraParams["tasks"][slIdx][3] == tourID] = self.solution[tourID]
+            # for slIdx in self.markedSls:
+            #     self.extraParams["tasks"][slIdx][4][
+            #         self.extraParams["tasks"][slIdx][3] == tourID] = self.solution[tourID]
 
 
 
 
 
     def bound(self):
+        timeStartBound = time.time()
         if self.lbMethod == "screenlineBasedLP":
+            # lp = LineProfiler()
+            # lp_wrapper = lp(self.screenlineBasedLPBound)
+            # lp_wrapper()
+            # lp.print_stats()
             self.screenlineBasedLPBound()
-            print(self.markedSls)
+            # print(self.markedSls)
         else:
             print(f"The lowerbound method '{self.lbMethod}' is not supported")
         if self.basicUpdateBool:
-            print(f"Lowerbound evaluated solution with value {self.value}")
+            print(f"Lowerbound evaluated solution with value {self.value} in {time.time() - timeStartBound:.2f} seconds")
 
 
     def evaluateSolution(self):
@@ -816,8 +888,8 @@ class lowerboundClass:
         # revTbw = np.divide(np.ones(nrOfClusters), tbw)
 
         devMatrix = self.solutionTranspose.copy()
-        nz = devMatrix.nonzero()
-        devMatrix[nz] -= tbw[nz[1]]
+        dmInd = devMatrix.indices
+        devMatrix.data -= tbw[dmInd]
         absdevMatrix = devMatrix.multiply(devMatrix.sign()).multiply(tComp)
         compValue = absdevMatrix.sum()
 
@@ -845,18 +917,26 @@ class lowerboundClass:
             lp_wrapper = lp(self.optimizeTrip)
             for slIdx in self.markedSls:
                 task = tasks[slIdx]
+                aDK = task[3]
+                ubVecLocal = self.ubVector[aDK]
+                lbVecLocal = self.lbVector[aDK]
+                curSol = self.solution[aDK]
                 startTimeSl = time.time()
-                results.append([slIdx, task[2]] + list(lp_wrapper(task)))
+                results.append([slIdx, task[2]] + list(lp_wrapper(task, curSol, ubVecLocal, lbVecLocal)))
                 endTimeSl = time.time()
                 sumOfTimes += (endTimeSl - startTimeSl)
                 if (task[-1] + 1) % 100 == 0 and self.updateBool:
-                    print(f"average time per screenline is {sumOfTimes / (task[-1] + 1)}")
+                    print(f"average  time per screenline is {sumOfTimes / (task[-1] + 1)}")
             lp.print_stats()
         else:
             for slIdx in self.markedSls:
                 task = tasks[slIdx]
                 startTimeSl = time.time()
-                results.append([slIdx, task[2]] + list(self.optimizeTrip(task)))
+                aDK = task[3]
+                ubVecLocal = self.ubVector[aDK]
+                lbVecLocal = self.lbVector[aDK]
+                curSol = self.solution[aDK]
+                results.append([slIdx, task[2]] + list(self.optimizeTrip(task, curSol, ubVecLocal, lbVecLocal)))
                 endTimeSl = time.time()
                 sumOfTimes += (endTimeSl - startTimeSl)
                 if (task[-1]+1) % 100 == 0 and self.updateBool:
@@ -874,7 +954,7 @@ class lowerboundClass:
             startIdx = self.solutionTranspose.indptr[slIdx]
             endIdx = self.solutionTranspose.indptr[slIdx+1]
 
-            self.solutionTranspose.data[startIdx:endIdx] = slSol[listOrder]
+            self.solutionTranspose.data[startIdx:endIdx] = slSol
             self.solutionTranspose.indices[startIdx:endIdx] = tourOrder
 
         self.solutionFinal = self.solutionTranspose.copy().transpose().tocsr()
@@ -891,6 +971,10 @@ class lowerboundClass:
         # self.solutionFinal = scipy.sparse.csc_matrix((dataList, (rowList, colList))).transpose()
 
         self.evaluateSolution()
+        # lp = LineProfiler()
+        # lp_wrapper = lp(self.evaluateSolution)
+        # lp_wrapper()
+        # lp.print_stats()
         # objVal = 0
         # if not self.solutionFinal:
         #     self.solutionFinal = aTS.copy()
@@ -921,12 +1005,11 @@ class lowerboundClass:
         # ascendingDensities = sorted(range(n), key=lambda k: valueList[k])
         # endSort = time.time()
         ascendingDensitiesKeys = columnList[ascendingDensities]
-        curSol = self.solution[ascendingDensitiesKeys]
+
         influence = getRow(aST,slIdx)[1][ascendingDensities]
         tbwLocal = tbw[ascendingDensitiesKeys]
         tCompLocal = tComp[ascendingDensitiesKeys]
-        ubVecLocal = self.ubVector[ascendingDensitiesKeys]
-        lbVecLocal = self.lbVector[ascendingDensitiesKeys]
+
         # ascendingDensitiesKeys = [columnList[idx] for idx in ascendingDensities]
         # curSol = [self.solution[tourIdx] for tourIdx in ascendingDensitiesKeys]
         # influence = [tourRow[0, tourIdx] for tourIdx in ascendingDensitiesKeys]
@@ -936,15 +1019,15 @@ class lowerboundClass:
         # lbVecLocal = [self.lbVector[tourIdx] for tourIdx in ascendingDensitiesKeys]
         # endList = time.time()
         # print(f"({(startSort-startList):.3f})/ ({(endSort-startSort):.3f})/ ({(endList-endSort):.3f}) total({(endList-startList):.3f}) list size {n}")
-        return [count, n, ascendingDensities, ascendingDensitiesKeys, curSol, influence, tbwLocal, tCompLocal,
-                ubVecLocal, lbVecLocal, slIdx]
+        return [count, n, ascendingDensities, ascendingDensitiesKeys, influence, tbwLocal, tCompLocal,
+                 slIdx]
 
     @staticmethod
-    def optimizeTrip(paramsInput):
+    def optimizeTrip(paramsInput, curSol, ubVecLocal, lbVecLocal):
         Linear = True
         LinearSkip = True
-        [count, n, ascendingDensities, ascendingDensitiesKeys, curSol, influence, tbwLocal, tCompLocal,
-         ubVecLocal, lbVecLocal, slIdx] = paramsInput
+        [count, n, ascendingDensities, ascendingDensitiesKeys, influence, tbwLocal, tCompLocal,
+          slIdx] = paramsInput
         curCount = curSol.dot(influence)
         maskUb = (curSol > ubVecLocal)
         maskLb = (curSol < lbVecLocal)
@@ -1024,16 +1107,10 @@ class lowerboundClass:
         return ascendingDensitiesKeys, curSol, abs(curCount - count) + np.abs(curSol - tbwLocal).dot(tCompLocal)
 
     def newNodePrep(self, constr):
-        self.value = self.value.copy()
-
-        self.solutionFinal = self.solutionFinal.copy()
-        self.solutionTranspose = self.solutionTranspose.copy()
         self.newConstraint = constr
         if constr[0] == 1:
-            self.ubVector = self.ubVector.copy()
             self.ubVector[constr[1]] = constr[2]
         else:
-            self.lbVector = self.lbVector.copy()
             self.lbVector[constr[1]] = constr[2]
         self.solution = np.minimum(self.ubVector,np.maximum(self.solution, self.lbVector))
         self.markSls()
@@ -1051,6 +1128,26 @@ class nodeClass:
         self.lbClass = lowerboundClass(lbParamDict)
         self.tag = nodeTag
 
+    @classmethod
+    def from_copy(cls, ineqType, lbOutputType, ubClass, lbClass, tag):
+        instance = cls.__new__(cls)  # Bypass __init__
+        instance.ineqType = ineqType
+        instance.lbOutputType = lbOutputType
+        instance.ubClass = ubClass
+        instance.lbClass = lbClass
+        instance.tag = tag
+        return instance
+
+    def __deepcopy__(self, memo):
+        new_copy = self.from_copy(
+            self.ineqType,
+            self.lbOutputType,
+            copy.deepcopy(self.ubClass, memo),
+            copy.deepcopy(self.lbClass, memo),
+            self.tag
+
+        )
+        return new_copy
 
     def bound(self):
         self.ubClass.bound()
@@ -1061,11 +1158,18 @@ class nodeClass:
     def findInequality(self):
         if self.ineqType == "tourBased":
             if self.lbOutputType == "csr":
-                avgTourWeight = self.lbClass.solutionFinal.mean(axis=1).flatten()
+                avgTourWeight2 = self.lbClass.solutionFinal.sum(axis=1).flatten()
+                avgTourWeight = np.divide(avgTourWeight2, slsOnTour)
                 copySol = self.lbClass.solutionFinal.copy()
                 nz = copySol.nonzero()
+                copySolCheck1 = copySol.copy()
                 copySol[nz] -= avgTourWeight[nz[0]]
-                stdDevs = np.sqrt(copySol.multiply(1 / upperbound).power(2).mean(axis=1).flatten())
+                copySolCheck2 = copySol.copy()
+                copySolCheck3 = copySol.multiply(1 / upperbound)
+                copySolCheck4 = copySolCheck3.copy().power(2)
+                copySolCheck5 = copySolCheck4.copy().sum(axis=1)
+                copySolCheck6 = np.divide(copySolCheck5.copy().flatten(), slsOnTour)
+                stdDevs = np.sqrt(copySolCheck6)
                 splitChoiceVec = np.abs(avgTourWeight - np.round(avgTourWeight)) + stdDevs
             elif self.lbOutputType == "array":
                 avgTourWeight = self.lbClass.solution.copy()
@@ -1085,13 +1189,14 @@ class nodeClass:
         nextDepth = self.tag[1] + 1
         lbTag = (nodeID, nextDepth)
         ubTag = (nodeID+1, nextDepth)
-        lbNode = copy.copy(self)
+        lbNode = copy.deepcopy(self, {})
         lbNode.newNodePrep(lbConstr, lbTag)
-        ubNode = copy.copy(self)
+        ubNode = copy.deepcopy(self, {})
         ubNode.newNodePrep(ubConstr, ubTag)
 
 
         return lbNode, lbTag, ubNode, ubTag, nodeID+2
+
 
 
     def newNodePrep(self, constr, tag):
@@ -1174,7 +1279,7 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
     # lb = lowerboundClass(lbParamDict)
     baseNode = nodeClass(ubParamDict, lbParamDict, splitParamDict, nodeTag)
     branchMeth = bnbParamDict['branchMethod']
-
+    debugDict = {nodeTag:[baseNode,[]]}
     if updateBoolBranch:
         print("Bounding root node, this will take a while")
     ubVal, ubSol, lbVal = baseNode.bound()
@@ -1219,6 +1324,12 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
 
         # create new nodes
         lbNode, lbTag, ubNode, ubTag, nodeID = branchNode.split(lbConstr, ubConstr, nodeID)
+        lbConstrList = debugDict[branchNode.tag][1].copy()
+        lbConstrList.append(lbConstr)
+        debugDict[lbTag] = [lbNode, lbConstrList]
+        ubConstrList = debugDict[branchNode.tag][1].copy()
+        ubConstrList.append(ubConstr)
+        debugDict[ubTag] = [ubNode, ubConstrList]
 
         # bound new nodes
         ubValLb, ubSolLb, lbValLb = lbNode.bound()
@@ -1352,7 +1463,7 @@ if __name__ == '__main__':
         branchAndBoundParameterDict = {"branchMethod":"globalLb", "maxNodes":1000, "maxBranchDepth":100, "maxTime":3600,
                                        "minObjGap":0, "minPercObjGap":0.05,
                                        "ubUpdates":False, "ubBasicUpdates":False,
-                                       "lbUpdates":False, "lbBasicUpdates":False,
+                                       "lbUpdates":False, "lbBasicUpdates":True,
                                        "branchingUpdates":True}
         branchAndBound(upperboundParameterDict, lowerboundParameterDict, splitInequalityParameterDict,
                        branchAndBoundParameterDict, upperBoundDeeperParameterDict, lowerBoundDeeperParameterDict)

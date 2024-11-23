@@ -11,6 +11,7 @@ import gzip
 from line_profiler import LineProfiler
 import gurobipy as gp
 from gurobipy import GRB
+from numpy import dtype
 from numpy.f2py.auxfuncs import throw_error
 from numpy.ma.core import indices
 
@@ -58,6 +59,7 @@ baseUb1 = np.empty(1)
 slSizes = np.empty(1)
 slsOnTour = np.empty(1)
 slMaxVal = np.empty(1)
+tbwPtrs = np.empty(1)
 
 upperbound = 5
 penalty = 1
@@ -91,6 +93,31 @@ def getRow(matrix, rowIdx):
     idxEnd = matrix.indptr[rowIdx+1]
     return matrix.indices[idxStart:idxEnd].copy(), matrix.data[idxStart:idxEnd].copy()
 
+
+def disturbSolution(startVec, noSteps, lbVec, ubVec):
+    # create step indices with matching 1 or -1 for increment or decrement
+    stepIndices = np.random.randint(0, nrOfClusters, size=noSteps)
+    stepSides = np.random.choice([-1.0, 1.0], size=noSteps)
+
+    # add steps to vec
+    np.add.at(startVec, stepIndices, stepSides)
+
+    # clip it back to bounds
+    np.clip(startVec, lbVec, ubVec, out=startVec)
+    return startVec
+
+
+def createRandomSolutionUniformTourwise(lbVec, ubVec, randMethod):
+    if randMethod == 'uniform':
+        # Vector with uniform discrete for each tour (astype is ~2x as slow as having all vecs beforehand int, but that needs extra work)
+        x_prime = np.random.randint(low=0, high=6, size=baseWeightSum).astype(np.float64)
+
+        # uses tbw pointers to add tour values to a cluster value
+        z = np.add.reduceat(x_prime, tbwPtrs[:-1])
+        np.clip(z, lbVec, ubVec, out=z)
+    else:
+        z = np.random.randint(low=lbVec, high=ubVec, size=nrOfClusters).astype(np.float64)
+    return z
 
 def readInModelParams(interceptPath, screenlinesUsedBool, screenlinesPath, tourDictPath, tourOnODDictPath):
     global tourDict, tourOnODDict, screenlines, counts, maxZoneNR, nrOfClusters, baseWeightSum, \
@@ -144,7 +171,7 @@ def readInModelParams(interceptPath, screenlinesUsedBool, screenlinesPath, tourD
 def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tourDictPath, tourOnODDictPath, sopath,
                        topath, tspath, oopath, sspath):
     global aTO, aOT, aSO, aTS, aST, nOD, cl, tbw, tp, maxZoneNR, nrOfClusters, baseWeightSum, ODNames, \
-        tourNames, screenlineNames, penalty, tComp, slMaxDiff, baseUb1, slSizes, slsOnTour,nrOfSls, slMaxVal
+        tourNames, screenlineNames, penalty, tComp, slMaxDiff, baseUb1, slSizes, slsOnTour,nrOfSls, slMaxVal, tbwPtrs
     sld = {}
     cd = {}
     with open(tourDictPath, 'r') as file:
@@ -181,18 +208,35 @@ def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tour
         cl[idx] = cd[name]
     tbw = np.empty(nrOfClusters)
     tp = np.empty(nrOfClusters)
+
+
+
     for name, idx in tourNames.items():
         tbw[idx] = tD[name][0]
         tp[idx] = tD[name][-1]
     baseUb1 = tbw*upperbound
-    baseWeightSum = np.sum(tbw)
+    min_val, max_val = 0.2, 1.8
+    randomStateMachine = np.random.RandomState(seed=128)
+    tp *= np.array([scipy.stats.irwinhall.rvs(n, loc=min_val, scale=(max_val - min_val)/n,
+                                              random_state=randomStateMachine)
+                    for n in tbw])
+    baseWeightSum = int(np.sum(tbw))
     ODNames = pd.Series(data=range(len(tOnODD.keys())), index=tOnODD.keys())
     aTO = scipy.sparse.load_npz(topath)
     aOT = aTO.tocsc(copy=True).transpose()
     aSO = scipy.sparse.load_npz(sopath)
     aTS = scipy.sparse.load_npz(tspath)
+    # VAVec = np.array([scipy.stats.irwinhall.rvs(n, loc=0.5,
+    #                                     random_state=randomStateMachine)
+    #           for n in aTS.data])
+    # aTS.data *= VAVec
+    for idx in range(nrOfClusters):
+        start, end = aTS.indptr[[idx,idx+1]]
+        aTS.data[start:end] *= tp[idx]
+
     slsOnTour = np.array([max(1,aTS._getrow(tourIdx).indices.size) for tourIdx in range(nrOfClusters)])
     tComp = np.array([1/(max(1,aTS._getrow(tourIdx).indices.size)*baseWeightSum) for tourIdx in range(nrOfClusters)])
+    tComp *= 10
     aST = aTS.tocsc(copy=True).transpose()
     nOD = scipy.sparse.load_npz(oopath)
     # nSl = scipy.sparse.load_npz(sspath)
@@ -205,6 +249,7 @@ def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tour
     slMaxVal = np.maximum(maxSLWeight, cl)
     # slMaxDiff = slMaxDiffCoo.tolist()
     nrOfSls = screenlineNames.size
+    tbwPtrs = np.concatenate(([0], np.cumsum(tbw))).astype(int)
     # penalty = max(sum(aTS[rowID, colID] for colID in aTS._getrow(rowID).indices) for rowID in range(nrOfClusters))
     # slMaxDiff = [max(aST[rowID,colID] for colID in aST._getrow(rowID).indices) for rowID in range(screenlineNames.size)]
     return
@@ -358,8 +403,10 @@ class upperboundClass:
             # self.solution, self.value = lp_wrapper(startingWeights=self.solution)
             # lp.print_stats()
             self.solution, self.value = self.tabooSearch(startingWeights=self.solution)
+        elif self.ubMethod == "BCO":
+            self.solution, self.value = self.beeColonyOptimization()
 
-    def tabooSearch(self, startingWeights=None):
+    def tabooSearch(self, startingWeights=None, maxNoImprovement=None, maxDepth=None, tabooLength=None):
         if startingWeights is None:
             minWeights = self.solution
         else:
@@ -379,12 +426,15 @@ class upperboundClass:
         # for idx in range(2*nrOfClusters):
         #     changeDiffList[idx] = self.calculateImprovement(curWeights,changeIdx=idx % nrOfClusters,
         #                                                     changeSide=2*(idx // nrOfClusters)-1, solCounts=solCounts)
-
-        maxDepth = self.ubMethodParameters["maxDepth"]
-        maxTime = self.ubMethodParameters["maxTime"]
-        maxNoImprovement = self.ubMethodParameters["maxNoImprovement"]
-        printDepth = self.ubMethodParameters["printDepth"]
-        recallDepth = self.ubMethodParameters["recallDepth"]
+        if maxDepth is None:
+            maxDepth = self.ubMethodParameters["maxDepth"]
+        maxTime = self.ubMethodParameters["maxTimeTaboo"]
+        if maxNoImprovement is None:
+            maxNoImprovement = self.ubMethodParameters["maxNoImprovement"]
+        if tabooLength is None:
+            tabooLength = self.ubMethodParameters["tabooLength"]
+        printDepth = self.ubMethodParameters.get("printDepth", 1000000)
+        recallDepth = self.ubMethodParameters.get("recallDepth",10000000)
 
         depth = 0
         lastImprovement = 0
@@ -440,7 +490,7 @@ class upperboundClass:
                 changeDiffList[np.unravel_index(tabooIdx, changeDiffList.shape)] -= 4*penalty
             tabooList.append(tabooIdx)
             changeDiffList[np.unravel_index(tabooIdx, changeDiffList.shape)] += 4*penalty
-            if len(tabooList) >= self.ubMethodParameters["tabooLength"]:
+            if len(tabooList) >= tabooLength:
                 removedTaboo = tabooList.pop(0)
                 changeDiffList[np.unravel_index(removedTaboo, changeDiffList.shape)] -= 4*penalty
                 # updateDiffs.add(removedTaboo % nrOfClusters)
@@ -543,13 +593,14 @@ class upperboundClass:
                 lastImprovement += 1
 
             depth += 1
-        if self.updateBool:
+        if self.updateBool and self.ubMethod == "tabooSearch":
             depthsOfImprovement = valueList.nonzero()
             # plt.plot(timeList[depthsOfImprovement], valueList[depthsOfImprovement])
             # plt.show()
-        if self.basicUpdateBool:
+        if ((self.basicUpdateBool and self.ubMethod == "tabooSearch") or
+                (self.updateBool and self.ubMethod != "tabooSearch")):
             print(f"Taboo finished in {time.time()-timeNow} with depth:{depth}, last improvement:{
-                        lastImprovement}/{maxNoImprovement}")
+                        lastImprovement}/{maxNoImprovement} and objective value {minValue}")
         return minWeights, minValue
 
 
@@ -641,6 +692,101 @@ class upperboundClass:
         diffArray[1, mask] += 16 * penalty
         return diffArray
 
+
+
+    def beeColonyOptimization(self):
+        locN = self.ubMethodParameters["locN"]
+        topLocN = self.ubMethodParameters["topLocN"]
+
+        scoutN = self.ubMethodParameters["scoutN"]
+        scoutStepsN = self.ubMethodParameters["scoutStepsN"]
+        scoutMaxNoImprovement = self.ubMethodParameters["scoutMaxNoImprovement"]
+        scoutListN = self.ubMethodParameters["scoutListN"]
+
+        disturbN = self.ubMethodParameters["disturbN"]
+        topLocWorkerN = self.ubMethodParameters["topLocWorkerN"]
+        lowWorkerN = self.ubMethodParameters["lowWorkerN"]
+        workerStepsN = self.ubMethodParameters["workerStepsN"]
+        workerMaxNoImprovement = self.ubMethodParameters["workerMaxNoImprovement"]
+        workerListN = self.ubMethodParameters["workerListN"]
+
+        maxDepthBCO = self.ubMethodParameters["maxDepthBCO"]
+        maxTimeBCO = self.ubMethodParameters["maxTimeBCO"]
+        maxNoImprovementBCO = self.ubMethodParameters["maxNoImprovementBCO"]
+
+        # endOfIterSols = np.zeros((scoutN+locN, nrOfClusters))
+        endOfIterVals = np.zeros(scoutN+locN)
+        startSol = self.solution
+        locationSols, locationVals = self.scoutAround(startSol, locN, scoutStepsN,
+                                                         scoutListN, scoutMaxNoImprovement)
+        # locationSols = self.initLocations(locN)
+        #
+        # locationVals = self.searchLocations(locationSols, locN, scoutStepsN, scoutListN, scoutMaxNoImprovement)
+        if not self.boundNecessary:
+            maxDepthBCO = maxDepthBCO//2
+            maxNoImprovementBCO = maxNoImprovementBCO//2
+
+        depthBCO = 0
+        BCOStart = time.time()
+        lastImprovementBCO = 0
+        bestIdx = np.argmin(locationVals)
+        bestVal = locationVals[bestIdx]
+        bestSol = locationSols[bestIdx]
+        while (depthBCO < maxDepthBCO and time.time() - BCOStart < maxTimeBCO
+                and lastImprovementBCO < maxNoImprovementBCO):
+            # Find top locations
+            print(f"Depth {depthBCO} has found value {bestVal}")
+            locIdxSplit = np.argpartition(locationVals, topLocN)
+            topLocIdxs = locIdxSplit[:topLocN]
+            lowLocIdxs = locIdxSplit[topLocN:]
+
+            if self.basicUpdateBool:
+                print(f"Before worker bees the best locations had values:\n{locationVals[topLocIdxs]}")
+            # Send bees to the best locations
+            for locIdx in topLocIdxs:
+                locationSols[locIdx], locationVals[locIdx] = self.workerBees(locationSols[locIdx], topLocWorkerN,
+                                                                                workerStepsN, workerListN, disturbN,
+                                                                             workerMaxNoImprovement)
+            if self.basicUpdateBool:
+                print(f"After worker bees the same locations have values:\n{locationVals[topLocIdxs]}")
+            if self.basicUpdateBool:
+                print(f"Before worker bees the bad locations had values:\n{locationVals[lowLocIdxs]}")
+            # Send bees to the remaining locations
+            for locIdx in lowLocIdxs:
+                locationSols[locIdx], locationVals[locIdx] = self.workerBees(locationSols[locIdx], lowWorkerN,
+                                                                                workerStepsN, workerListN, disturbN,
+                                                                             workerMaxNoImprovement)
+            if self.basicUpdateBool:
+                print(f"After worker bees the same locations have values:\n{locationVals[lowLocIdxs]}")
+            # Send scouts to find new locations
+            # scoutLocSols = self.initLocations(scoutN)
+            # scoutLocVals = self.searchLocations(scoutLocSols, scoutN, scoutStepsN, scoutListN, scoutMaxNoImprovement)
+
+            scoutLocSols,scoutLocVals = self.scoutAround(locationSols[np.argmin(locationVals)],scoutN, scoutStepsN,
+                                                         scoutListN, scoutMaxNoImprovement)
+            if self.basicUpdateBool:
+                print(f"Scouts found new solutions with the values:\n{scoutLocVals}")
+            # Merge the two lists and pick the locN best ones
+            np.concatenate((locationVals, scoutLocVals), axis=0, out=endOfIterVals)
+            keptLocIdxs = np.argpartition(endOfIterVals, locN)[:locN]
+            locKeptBools = (keptLocIdxs < locN)
+            locKeptLocIdxs = keptLocIdxs[locKeptBools]
+            scoutKeptLocIdxs = keptLocIdxs[np.logical_not(locKeptBools)] - locN
+            np.concatenate((locationVals[locKeptLocIdxs], scoutLocVals[scoutKeptLocIdxs]), axis=0, out=locationVals)
+            np.concatenate((locationSols[locKeptLocIdxs], scoutLocSols[scoutKeptLocIdxs]), axis=0, out=locationSols)
+
+            locatBestidx = np.argmin(locationVals)
+            locatBestVal = locationVals[locatBestidx]
+            if locatBestVal < bestVal:
+                lastImprovementBCO = 0
+                bestVal = locatBestVal
+                bestSol = locationSols[locatBestidx]
+            else:
+                lastImprovementBCO += 1
+            depthBCO += 1
+
+
+        return bestSol, bestVal
 
 
 
@@ -827,8 +973,32 @@ class upperboundClass:
             self.lbVector[constr[1]] = constr[2]
         self.updateSolutions(constr)
 
+    def initLocations(self, numberOfLocation):
+        return np.array([createRandomSolutionUniformTourwise(self.lbVector, self.ubVector, "total")
+                         for _ in range(numberOfLocation)])
 
 
+    def searchLocations(self, locationSols, locationN, stepMax, tabooMax, noImprovement):
+        locationVals = np.zeros(locationN)
+        for locSolIdx in range(locationN):
+            locationSols[locSolIdx], locationVals[locSolIdx] \
+                = self.tabooSearch(startingWeights=locationSols[locSolIdx], maxNoImprovement=noImprovement,
+                                   maxDepth=stepMax, tabooLength=tabooMax)
+        return locationVals
+
+
+    def workerBees(self, locSol, beeN, stepsN, listN, disturbN, noImproveMax):
+        locBeeSols = np.array([disturbSolution(locSol.copy(), disturbN, self.lbVector, self.ubVector)
+                                    for _ in range(beeN)])
+        locBeeVals = self.searchLocations(locBeeSols, beeN, stepsN, listN, noImproveMax)
+        bestBeeIdx = np.argmin(locBeeVals)
+        return locBeeSols[bestBeeIdx], locBeeVals[bestBeeIdx]
+
+    def scoutAround(self, locSol, scoutN, scoutStepsN, scoutListN, scoutMaxNoImprovement):
+        locBeeSols = np.array([disturbSolution(locSol.copy(), scoutStepsN//2, self.lbVector, self.ubVector)
+                               for _ in range(scoutN)])
+        locBeeVals = self.searchLocations(locBeeSols, scoutN, scoutStepsN, scoutListN, scoutMaxNoImprovement)
+        return locBeeSols, locBeeVals
 
 
 class lowerboundClass:
@@ -1024,7 +1194,7 @@ class lowerboundClass:
 
         m = self.extraVars["model"]
         # m.reset()
-        m.setParam(GRB.Param.MIPGap, self.extraParams["MIPGap"])
+        # m.setParam(GRB.Param.MIPGap, self.extraParams["MIPGap"])
 
         m.optimize()
         self.value = m.ObjBound
@@ -1277,11 +1447,11 @@ class lowerboundClass:
 
     def makeModel(self, integerBool):
         m = gp.Model(f"Upperbound: {upperbound}")
-        m.setParam("OutputFlag", 0)
+        # m.setParam("OutputFlag", 0)
         # m.setParam(GRB.Param.Presolve, 0)
         m.setParam(GRB.Param.DisplayInterval, 10)
-        m.setParam(GRB.Param.Method, 3)
-        m.setParam("ConcurrentMethod", 3)
+        # m.setParam(GRB.Param.Method, 3)
+        # m.setParam("ConcurrentMethod", 3)
         # m.setParam(GRB.Param.BarIterLimit, 0)
         if integerBool:
             tourWeight = m.addVars(nrOfClusters, vtype=GRB.INTEGER, ub=self.ubVector.tolist(), lb=self.lbVector.tolist(), name="clusterWeights")
@@ -1307,16 +1477,20 @@ class lowerboundClass:
                                         for clusterIdx in range(rowSize)) - absoluteErrors[slIdx]
                         <= cl[slIdx]), name=f"negative errors Screenline {slIdx}")
 
-        m.addConstrs(((tourWeight[clusterIdx] - 1 == tourDeviation[clusterIdx]) for clusterIdx in range(nrOfClusters)),
-                     name="Deviation of cluster")
+        m.addConstrs(((tourWeight[clusterIdx] - tourDeviation[clusterIdx] <= tbw[clusterIdx]) for clusterIdx in range(nrOfClusters)),
+                     name="Positive deviation of cluster")
+        m.addConstrs(((tourWeight[clusterIdx] + tourDeviation[clusterIdx] >= tbw[clusterIdx]) for clusterIdx in range(nrOfClusters)),
+                     name="Negative deviation of cluster")
         # m.addConstrs(((tourWeight[ODpair] - 1 <= largeErrors[ODpair]) for ODpair in toursDF.index.tolist()),
         #              name="Large errors in tour")
-        m.addConstr(totalError == gp.quicksum(tourDeviation[idx]*tComp[idx] for idx in range(nrOfClusters)), name=f"total error")
-
+        # m.addConstr(totalError == gp.quicksum(tourDeviation[idx]*tourDeviation[idx]*tComp[idx]/tbw[idx] for idx in range(nrOfClusters)), name=f"total error")
+        m.addConstr(totalError == gp.quicksum(
+            tourDeviation[idx] * tComp[idx] for idx in range(nrOfClusters)),
+                    name=f"total error")
 
 
         objective = (gp.quicksum(absoluteErrors[slIdx] for slIdx in range(nrOfSls))
-                     +  (
+                     + (
                          totalError))  # + gp.quicksum(largeErrors[ODpair] for ODpair in toursDF.index.tolist())
         m.setObjective(objective, GRB.MINIMIZE)
         m.update()
@@ -1406,9 +1580,17 @@ class nodeClass:
         return new_copy
 
     def bound(self):
-        self.ubClass.bound()
+        lbStartTime = time.time()
         self.lbClass.bound()
-        return self.ubClass.value, self.ubClass.solution, self.lbClass.value
+        lbTotalTime = time.time() - lbStartTime
+        if self.tag[0] == 0:
+            self.ubClass.solution = np.clip(np.round(self.lbClass.solution), self.lbClass.lbVector, self.lbClass.ubVector)
+        print(self.lbClass.value)
+        print(np.sum(np.abs(self.lbClass.solution - self.ubClass.solution)))
+        ubStartTime = time.time()
+        self.ubClass.bound()
+        ubTotalTime = time.time() - ubStartTime
+        return self.ubClass.value, self.ubClass.solution, self.lbClass.value, lbTotalTime, ubTotalTime
 
 
     def findInequality(self):
@@ -1536,12 +1718,19 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
     # ub = upperboundClass(ubParamDict)
     # lb = lowerboundClass(lbParamDict)
     baseNode = nodeClass(ubParamDict, lbParamDict, splitParamDict, nodeTag)
+
     branchMeth = bnbParamDict['branchMethod']
     maxMIPGap = bnbParamDict["maxMIPGap"]
     debugDict = {nodeTag:[baseNode,[]]}
     if updateBoolBranch:
         print("Bounding root node, this will take a while")
-    ubVal, ubSol, lbVal = baseNode.bound()
+    ubVal, ubSol, lbVal, lbTime, ubTime = baseNode.bound()
+    lbValArray[nodeID] = lbVal
+    lbTimeArray[nodeID] = lbTime
+    ubValArray[nodeID] = ubVal
+    ubTimeArray[nodeID] = ubTime
+
+
 
     # Initialize bounds and dicts
     globalUb = [nodeTag, ubSol, ubVal]
@@ -1550,6 +1739,8 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
     ubValDict = {nodeTag:ubVal}
     nodeDict = {nodeTag:baseNode}
     nodeID += 1
+
+
 
     # Set params to non base params
     if "methodParameters" in ubDeepParamDict:
@@ -1577,7 +1768,7 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
         branchNode = nodeDict.pop(branchTag)
         branchLbVal = lbValDict.pop(branchTag)
         branchUbVal = ubValDict.pop(branchTag)
-        branchGap = (branchUbVal - branchLbVal)/branchUbVal
+        branchGap = 0.25*((branchUbVal - branchLbVal)/branchUbVal)
         # find split ineqs
         lbConstr, ubConstr = branchNode.findInequality()
 
@@ -1592,8 +1783,20 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
         debugDict[ubTag] = [ubNode, ubConstrList]
 
         # bound new nodes
-        ubValLb, ubSolLb, lbValLb = lbNode.bound()
-        ubValUb, ubSolUb, lbValUb = ubNode.bound()
+        ubValLb, ubSolLb, lbValLb, lbTime, ubTime = lbNode.bound()
+        relNodeId = lbNode.tag[0]
+        lbValArray[relNodeId] = lbValLb
+        lbTimeArray[relNodeId] = lbTime
+        ubValArray[relNodeId] = ubValLb
+        ubTimeArray[relNodeId] = ubTime
+
+        ubValUb, ubSolUb, lbValUb, lbTime, ubTime = ubNode.bound()
+        relNodeId = ubNode.tag[0]
+        lbValArray[relNodeId] = lbValUb
+        lbTimeArray[relNodeId] = lbTime
+        ubValArray[relNodeId] = ubValUb
+        ubTimeArray[relNodeId] = ubTime
+
         if updateBoolBranch:
             print(f"Branched on node {branchTag} (lb:{branchLbVal:.3f}, ub:{branchUbVal:.3f}),"
                   f" creating the following nodes:\n"
@@ -1606,11 +1809,11 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
             globalUb = [ubTag, ubSolUb, ubValUb]
 
         # check if new nodes are to be added
-        if lbValLb <= globalUb[-1] and newNodeDepth <= maxBranchDepth:
+        if lbValLb <= globalUb[-1] and newNodeDepth < maxBranchDepth:
             ubValDict[lbTag] = ubValLb
             lbValDict[lbTag] = lbValLb
             nodeDict[lbTag] = lbNode
-        if lbValUb <= globalUb[-1] and newNodeDepth <= maxBranchDepth:
+        if lbValUb <= globalUb[-1] and newNodeDepth < maxBranchDepth:
             ubValDict[ubTag] = ubValUb
             lbValDict[ubTag] = lbValUb
             nodeDict[ubTag] = ubNode
@@ -1626,7 +1829,8 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
             nodeDict.pop(tag)
 
         # update global lowerbound
-        globalLb = list(min(lbValDict.items(), key=lambda tup: tup[1]))
+        if lbValDict:
+            globalLb = list(min(lbValDict.items(), key=lambda tup: tup[1]))
 
 
     return globalUb, globalLb
@@ -1745,8 +1949,39 @@ def superClustering(superclustersfile, superclustersOutfile, adjcsfile):
     return
 
 
+
+extraParamsBCO = {"locN":10, "topLocN":3,
+                  "scoutN":3, "scoutStepsN":25000, "scoutMaxNoImprovement":1000, "scoutListN":800,
+                  "disturbN":2500,"topLocWorkerN":25,"lowWorkerN":10,
+                  "workerStepsN":2500,"workerMaxNoImprovement":250,"workerListN":200,
+                  "maxDepthBCO":15,"maxTimeBCO":12000,"maxNoImprovementBCO":4,"maxTimeTaboo":150}
+
+extraParamsBCOHighLoc = {"locN":100, "topLocN":24,
+                          "scoutN":100, "scoutStepsN":250, "scoutMaxNoImprovement":100, "scoutListN":80,
+                          "disturbN":25,"topLocWorkerN":15,"lowWorkerN":5,
+                          "workerStepsN":25,"workerMaxNoImprovement":25,"workerListN":20,
+                          "maxDepthBCO":15,"maxTimeBCO":1200,"maxNoImprovementBCO":4,"maxTimeTaboo":15}
+
+extraParamsTabooFirst = {"maxDepth": 750000, "tabooLength": 10000,
+                                                       "maxNoImprovement": 8000, "maxTimeTaboo": 600,
+                                                       "printDepth": 200000, "recallDepth": 100000}
+
+extraParamsTabooSecond = {"maxDepth": 75000, "tabooLength": 10000,
+                                                                "maxNoImprovement": 8000, "maxTimeTaboo": 60,
+                                                                "printDepth": 20000, "recallDepth": 100000}
+
+extraParamsTabooFake = {"maxDepth": 0, "tabooLength": 0,
+                                                                "maxNoImprovement": 0, "maxTimeTaboo": 60,
+                                                                "printDepth": 20000, "recallDepth": 100000}
+
 if __name__ == '__main__':
-    parametersType = -3
+    parametersType = -5
+    lbValArray = np.zeros(1023)
+    lbTimeArray = np.zeros(1023)
+    ubValArray = np.zeros(1023)
+    ubTimeArray = np.zeros(1023)
+
+
     if parametersType == 1:
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
@@ -1856,21 +2091,25 @@ if __name__ == '__main__':
         readInModelParams2(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile, adjsofile,
                            adjtofile, adjtsfile, neighofile, neighsfile)
         # clusterTester()
-        upperboundParameterDict = {"method":"tabooSearch",
-                                   "methodParameters":{"maxDepth": 750000, "tabooLength": 10000,
-                                                       "maxNoImprovement": 8000, "maxTime": 600,
-                                                       "printDepth": 200000, "recallDepth": 100000}}
-        lowerboundParameterDict = {"method":"linearRelaxation"}
-        upperBoundDeeperParameterDict = {"method":"tabooSearch",
-                                            "methodParameters":{"maxDepth": 75000, "tabooLength": 10000,
-                                                                "maxNoImprovement": 8000, "maxTime": 60,
-                                                                "printDepth": 20000, "recallDepth": 100000}}
-        lowerBoundDeeperParameterDict = {"method":"linearRelaxation"}
+        # lbV = np.zeros(nrOfClusters)
+        # ubV = (tbw*upperbound)
+        # curVec = tbw.copy()
+        # lp = LineProfiler()
+        # lp_wrapper = lp(disturbSolution)
+        # for i in range(1000):
+        #     lp_wrapper(curVec, 50, lbV, ubV)
+        # lp.print_stats()
+        upperboundParameterDict = {"method":"BCO",
+                                   "methodParameters":extraParamsBCO}
+        lowerboundParameterDict = {"method":"screenlineBasedLP"}                 # linearRelaxation screenlineBasedLP
+        upperBoundDeeperParameterDict = {"method":"BCO",
+                                            "methodParameters":extraParamsBCOHighLoc}
+        lowerBoundDeeperParameterDict = {"method":"screenlineBasedLP"}
         splitInequalityParameterDict = {"ineqType":"tourBased", "lbOutputType":"array"}
-        branchAndBoundParameterDict = {"branchMethod":"breadthFirst",
+        branchAndBoundParameterDict = {"branchMethod":"smallestGap",
                                        "maxNodes":100000, "maxBranchDepth":1000, "maxTime":3600,
                                        "minObjGap":0, "minPercObjGap":0.05, "maxMIPGap":0.0005,
-                                       "ubUpdates":False, "ubBasicUpdates":True,
+                                       "ubUpdates":False, "ubBasicUpdates":False,
                                        "lbUpdates":False, "lbBasicUpdates":False,
                                        "branchingUpdates":True}
         branchAndBound(upperboundParameterDict, lowerboundParameterDict, splitInequalityParameterDict,
@@ -1895,6 +2134,56 @@ if __name__ == '__main__':
         lb.makeModel(True)
         lb.bound()
         print(np.where(lb.solution - np.round(lb.solution)>0.0002))
+    elif parametersType == -5:
+        interceptFile = "CountsV2.json"
+        screenlinesUsed = True
+        screenlinesFile = "ScreenlinesDiscreetV2.json"
+        tourDictFile = "superclusters.json"
+        tourOnODDictFile = "clusterOnODDict.json"
+        adjsofile = "adjSlOD.npz"
+        adjtofile = "adjTourOD.npz"
+        adjtsfile = "adjClSl.npz"
+        neighofile = "neighboursOD.npz"
+        neighsfile = "neighboursSl.npz"
+        startTime = time.time()
+        readInModelParams2(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile, adjsofile,
+                           adjtofile, adjtsfile, neighofile, neighsfile)
+        # clusterTester()
+        # lbV = np.zeros(nrOfClusters)
+        # ubV = (tbw*upperbound)
+        # curVec = tbw.copy()
+        # lp = LineProfiler()
+        # lp_wrapper = lp(disturbSolution)
+        # for i in range(1000):
+        #     lp_wrapper(curVec, 50, lbV, ubV)
+        # lp.print_stats()
+        upperboundParameterDict = {"method":"tabooSearch",
+                                   "methodParameters":extraParamsTabooFake}     # tabooSearch BCO
+        lowerboundParameterDict = {"method":"linearRelaxation"}                 # linearRelaxation screenlineBasedLP
+        upperBoundDeeperParameterDict = {"method":"tabooSearch",
+                                            "methodParameters":extraParamsTabooFake}
+        lowerBoundDeeperParameterDict = {"method":"linearRelaxation"}
+        splitInequalityParameterDict = {"ineqType":"tourBased", "lbOutputType":"array"}
+        branchAndBoundParameterDict = {"branchMethod":"breadthFirst",
+                                       "maxNodes":1023, "maxBranchDepth":9, "maxTime":36000,
+                                       "minObjGap":0, "minPercObjGap":0.05, "maxMIPGap":0.0001,
+                                       "ubUpdates":False, "ubBasicUpdates":False,
+                                       "lbUpdates":False, "lbBasicUpdates":False,
+                                       "branchingUpdates":True}
+        branchAndBound(upperboundParameterDict, lowerboundParameterDict, splitInequalityParameterDict,
+                       branchAndBoundParameterDict, upperBoundDeeperParameterDict, lowerBoundDeeperParameterDict)
+        # Create the DataFrame
+        data = {
+            "lbTime": lbTimeArray,
+            "lbVal": lbValArray,
+            "ubTime": ubTimeArray,
+            "ubVal": ubValArray
+        }
+        df = pd.DataFrame(data)
+
+        # Save to Excel
+        output_file = 'LR_None_data.xlsx'
+        df.to_excel(output_file, index=False)
     else:
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
@@ -1928,6 +2217,26 @@ if __name__ == '__main__':
                                        "branchingUpdates":True}
         branchAndBound(upperboundParameterDict, lowerboundParameterDict, splitInequalityParameterDict,
                        branchAndBoundParameterDict, upperBoundDeeperParameterDict, lowerBoundDeeperParameterDict)
+
+
+        # locN = self.ubMethodParameters["locN"]
+        # topLocN = self.ubMethodParameters["topLocN"]
+        #
+        # scoutN = self.ubMethodParameters["scoutN"]
+        # scoutStepsN = self.ubMethodParameters["scoutStepsN"]
+        # scoutMaxNoImprovement = self.ubMethodParameters["scoutMaxNoImprovement"]
+        # scoutListN = self.ubMethodParameters["scoutListN"]
+        #
+        # disturbN = self.ubMethodParameters["disturbN"]
+        # topLocWorkerN = self.ubMethodParameters["topLocWorkerN"]
+        # lowWorkerN = self.ubMethodParameters["lowWorkerN"]
+        # workerStepsN = self.ubMethodParameters["workerStepsN"]
+        # workerMaxNoImprovement = self.ubMethodParameters["workerMaxNoImprovement"]
+        # workerListN = self.ubMethodParameters["workerListN"]
+        #
+        # maxDepthBCO = self.ubMethodParameters["maxDepthBCO"]
+        # maxTimeBCO = self.ubMethodParameters["maxTimeBCO"]
+        # maxNoImprovementBCO = self.ubMethodParameters["maxNoImprovementBCO"]
 
 
     # branchAndBound(upperboundParameterDict, lowerboundParameterDict,

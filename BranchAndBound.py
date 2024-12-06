@@ -1,6 +1,8 @@
 import copy
 import json
+import math
 import time
+from datetime import datetime
 
 import pandas as pd
 from multiprocessing import Pool
@@ -332,20 +334,22 @@ class upperboundClass:
         ubVector = ubParamDict.get("ubVec", baseUb1.copy())
         lbVector = ubParamDict.get("lbVec", np.zeros(nrOfClusters))
         newConstraint = ubParamDict.get("newConstraint", False)
-        value = ubParamDict.get("value", 0)
+
         ubMethodParameters = ubParamDict.get("methodParameters", {})
         if not ubMethodParameters:
             if ubMeth == "tabooSearch":
                 ubMethodParameters = {"maxDepth": 750000, "tabooLength": 1000, "maxNoImprovement": 800, "maxTime": 600,
                                       "printDepth": 10000, "recallDepth": 25000}
         if "solution" not in ubParamDict:
-            self.solution = np.maximum(lbVector, np.minimum(tbw, ubVector))
+            self.solution = np.clip(tbw, lbVector, ubVector)
         else:
             self.solution = ubParamDict.get("solution", np.zeros(nrOfClusters))
         self.ubMethod = ubMeth
         # self.solution = solution
         self.ubMethodParameters = ubMethodParameters
+        value = ubParamDict.get("value", 0)
         self.value = value
+        self.calibrationValue = ubParamDict.get("calibrationValue", value)
         self.lbVector = lbVector
         self.ubVector = ubVector
         self.newConstraint = newConstraint
@@ -358,7 +362,7 @@ class upperboundClass:
 
     @classmethod
     def from_copy(cls, lbVector, ubVector, solution, ubMethod, ubMethodParameters,
-                  value, newConstraint, updateBool, boundNecessary, basicUpdateBool):
+                  value, calibrationValue, newConstraint, updateBool, boundNecessary, basicUpdateBool):
         instance = cls.__new__(cls)  # Bypass __init__
         instance.lbVector = lbVector
         instance.ubVector = ubVector
@@ -366,6 +370,7 @@ class upperboundClass:
         instance.ubMethod = ubMethod
         instance.ubMethodParameters = ubMethodParameters
         instance.value = value
+        instance.calibrationValue = calibrationValue
         instance.newConstraint = newConstraint
         instance.updateBool = updateBool
         instance.boundNecessary = boundNecessary
@@ -381,6 +386,7 @@ class upperboundClass:
             ubMethod=self.ubMethod,
             ubMethodParameters=self.ubMethodParameters,
             value=self.value,
+            calibrationValue=self.calibrationValue,
             newConstraint=self.newConstraint,
             updateBool=self.updateBool,
             boundNecessary=self.boundNecessary,
@@ -388,13 +394,21 @@ class upperboundClass:
         )
         return new_copy
 
+
+    def changeType(self, newMethod, newMethodParameters):
+        self.ubMethod = newMethod
+        self.ubMethodParameters = newMethodParameters
+        self.boundNecessary = True
+
+
     def updateSolutions(self, Constraint):
         side, tourID, value = Constraint
         if side * self.solution[tourID] > side * value:
             self.solution[tourID] = value
             self.boundNecessary = True
-        else:
+        elif self.ubMethod != "tabooSearch":
             self.boundNecessary = False
+        # print(self.boundNecessary)
 
     def bound(self):
         if self.ubMethod == "tabooSearch" and self.boundNecessary:
@@ -405,13 +419,15 @@ class upperboundClass:
             self.solution, self.value = self.tabooSearch(startingWeights=self.solution)
         elif self.ubMethod == "BCO":
             self.solution, self.value = self.beeColonyOptimization()
+        elif self.ubMethod == "none":
+            self.value = self.evaluateSolution()[0]
 
     def tabooSearch(self, startingWeights=None, maxNoImprovement=None, maxDepth=None, tabooLength=None):
         if startingWeights is None:
             minWeights = self.solution
         else:
             minWeights = startingWeights
-        curWeights = minWeights
+        curWeights = minWeights.copy()
         minValue, solCounts = self.evaluateSolution(curWeights)
         tempValue = minValue
         # first make matrix of objective change when in/decrementing a tour by 1
@@ -457,6 +473,8 @@ class upperboundClass:
         else:
             timeList = np.empty(1)
             valueList = np.empty(1)
+        lp = LineProfiler()
+        lp_wrapper = lp(self.updateCurrentSolution)
         timeBeforeLoop = time.time()
         stopTime = timeBeforeLoop + maxTime
         # print(f"Created difference vector in {timeBeforeLoop - timeBeforeDiff:.3f} seconds")
@@ -526,11 +544,10 @@ class upperboundClass:
 
             updateStartTime = time.time()
             if measuringBool:
-                lp = LineProfiler()
-                lp_wrapper = lp(self.updateCurrentSolution)
-                sizes, potentialSizes, newTime, oldTime, forBool = lp_wrapper(solCounts, nextStepSide, nextStepTIdx, changeDiffList)
 
-                if forBool >= 5:
+                sizes, potentialSizes, newTime, oldTime, forBool = lp_wrapper(solCounts, nextStepSide, nextStepTIdx, changeDiffList)
+                # lp.print_stats()
+                if depth >= 500:
                     lp.print_stats()
                     print("hmm")
             else:
@@ -555,19 +572,21 @@ class upperboundClass:
                 newDiffList = self.initDiffList(curWeights, solCounts)
                 newDiffList[np.unravel_index(tabooList, changeDiffList.shape)] += 4 * penalty
 
-                mask = (np.abs(changeDiffList - newDiffList) > 0.00002)
+                mask = (np.abs(changeDiffList - newDiffList) > 0.0002)
 
                 if np.any(mask):
                     newDiffList2 = self.initDiffListOld(curWeights, solCounts)
                     newDiffList2[np.unravel_index(tabooList, changeDiffList.shape)] += 4 * penalty
-                    mask2 = (np.abs(newDiffList - newDiffList2) > 0.00002)
+                    mask2 = (np.abs(newDiffList - newDiffList2) > 0.0002)
                     print([changeDiffList[mask], newDiffList[mask]])
                     print("uh oh")
                 changeDiffList = newDiffList
+                if abs(self.evaluateSolution(minWeights)[0]-minValue) > 1:
+                    print("error")
                 minValue = self.evaluateSolution(minWeights)[0]
             if tempValue < minValue:
                 minValue = tempValue
-                minWeights = curWeights
+                minWeights = curWeights.copy()
                 lastImprovement = 0
                 improvementCount += 1
                 # val, sol = self.evaluateSolution(curWeights)
@@ -601,6 +620,9 @@ class upperboundClass:
                 (self.updateBool and self.ubMethod != "tabooSearch")):
             print(f"Taboo finished in {time.time()-timeNow} with depth:{depth}, last improvement:{
                         lastImprovement}/{maxNoImprovement} and objective value {minValue}")
+        if self.ubMethod == "tabooSearch":
+            self.boundNecessary = (depth == maxDepth)
+
         return minWeights, minValue
 
 
@@ -693,32 +715,71 @@ class upperboundClass:
         return diffArray
 
 
+    def findCalFactor(self, curVal, maxCallDiff):
+        diff = curVal-self.calibrationValue
+        diff = min(maxCallDiff, max(diff,0))
+        diff = diff/maxCallDiff
+        diff -= 0.5
+        diff *= 2
+        diff = math.sqrt(diff) if diff >= 0 else -math.sqrt(-diff)
+        diff /= 2
+        diff += 0.5
+        return diff                                # math.sqrt(diff/maxCallDiff)
+
+
+    def findParametersCalBCO(self, calFactor, closeDictParams, farDictParams):
+        closeFactor = 1 - calFactor
+        newParams = (round(closeFactor*closeDictParams[i] + calFactor*farDictParams[i])
+                     for i in range(len(closeDictParams)))
+        return newParams
+
+
+
+    @staticmethod
+    def extractParametersBCO(paramDict):
+        locN = paramDict["locN"]
+        topLocN = paramDict["topLocN"]
+
+        scoutN = paramDict["scoutN"]
+        scoutStepsN = paramDict["scoutStepsN"]
+        scoutMaxNoImprovement = paramDict["scoutMaxNoImprovement"]
+        scoutListN = paramDict["scoutListN"]
+
+        disturbN = paramDict["disturbN"]
+        topLocWorkerN = paramDict["topLocWorkerN"]
+        lowWorkerN = paramDict["lowWorkerN"]
+        workerStepsN = paramDict["workerStepsN"]
+        workerMaxNoImprovement = paramDict["workerMaxNoImprovement"]
+        workerListN = paramDict["workerListN"]
+
+        maxDepthBCO = paramDict["maxDepthBCO"]
+        maxTimeBCO = paramDict["maxTimeBCO"]
+        maxNoImprovementBCO = paramDict["maxNoImprovementBCO"]
+        maxTimeTaboo = paramDict["maxTimeTaboo"]
+        return (locN, topLocN, scoutN, scoutStepsN, scoutMaxNoImprovement,
+                scoutListN, disturbN, topLocWorkerN, lowWorkerN, workerStepsN,
+                workerMaxNoImprovement, workerListN, maxDepthBCO, maxTimeBCO, maxNoImprovementBCO,maxTimeTaboo)
 
     def beeColonyOptimization(self):
-        locN = self.ubMethodParameters["locN"]
-        topLocN = self.ubMethodParameters["topLocN"]
-
-        scoutN = self.ubMethodParameters["scoutN"]
-        scoutStepsN = self.ubMethodParameters["scoutStepsN"]
-        scoutMaxNoImprovement = self.ubMethodParameters["scoutMaxNoImprovement"]
-        scoutListN = self.ubMethodParameters["scoutListN"]
-
-        disturbN = self.ubMethodParameters["disturbN"]
-        topLocWorkerN = self.ubMethodParameters["topLocWorkerN"]
-        lowWorkerN = self.ubMethodParameters["lowWorkerN"]
-        workerStepsN = self.ubMethodParameters["workerStepsN"]
-        workerMaxNoImprovement = self.ubMethodParameters["workerMaxNoImprovement"]
-        workerListN = self.ubMethodParameters["workerListN"]
-
-        maxDepthBCO = self.ubMethodParameters["maxDepthBCO"]
-        maxTimeBCO = self.ubMethodParameters["maxTimeBCO"]
-        maxNoImprovementBCO = self.ubMethodParameters["maxNoImprovementBCO"]
-
+        maxCallDiff = self.ubMethodParameters["maxCallDiff"]
+        farDict = self.extractParametersBCO(self.ubMethodParameters["farDict"])
+        closeDict = self.extractParametersBCO(self.ubMethodParameters["closeDict"])
+        startVal = self.evaluateSolution()[0]
+        self.value = startVal
+        calFactor = self.findCalFactor(self.value, maxCallDiff)
+        (locN, topLocN, scoutN, scoutStepsN, scoutMaxNoImprovement,
+         scoutListN, disturbN, topLocWorkerN, lowWorkerN, workerStepsN,
+         workerMaxNoImprovement, workerListN, maxDepthBCO, maxTimeBCO, maxNoImprovementBCO,maxTimeTaboo) = (
+            self.findParametersCalBCO(calFactor, closeDict, farDict))
+        self.ubMethodParameters["maxTimeTaboo"] = maxTimeTaboo
         # endOfIterSols = np.zeros((scoutN+locN, nrOfClusters))
-        endOfIterVals = np.zeros(scoutN+locN)
+
         startSol = self.solution
         locationSols, locationVals = self.scoutAround(startSol, locN, scoutStepsN,
-                                                         scoutListN, scoutMaxNoImprovement)
+                                                         scoutListN, scoutMaxNoImprovement,addBase=True)
+        # locationSols = np.append(locationSols, startSol, axis=0)
+        # locationVals = np.append(locationVals, startVal)
+
         # locationSols = self.initLocations(locN)
         #
         # locationVals = self.searchLocations(locationSols, locN, scoutStepsN, scoutListN, scoutMaxNoImprovement)
@@ -732,8 +793,16 @@ class upperboundClass:
         bestIdx = np.argmin(locationVals)
         bestVal = locationVals[bestIdx]
         bestSol = locationSols[bestIdx]
+
         while (depthBCO < maxDepthBCO and time.time() - BCOStart < maxTimeBCO
                 and lastImprovementBCO < maxNoImprovementBCO):
+            # update bee parameters
+            calFactor = self.findCalFactor(bestVal, maxCallDiff)
+            (_, _, scoutN, scoutStepsN, scoutMaxNoImprovement,
+             scoutListN, disturbN, topLocWorkerN, lowWorkerN, workerStepsN,
+             workerMaxNoImprovement, workerListN, _, _, _,_) = (
+                self.findParametersCalBCO(calFactor, closeDict, farDict))
+
             # Find top locations
             print(f"Depth {depthBCO} has found value {bestVal}")
             locIdxSplit = np.argpartition(locationVals, topLocN)
@@ -767,6 +836,7 @@ class upperboundClass:
             if self.basicUpdateBool:
                 print(f"Scouts found new solutions with the values:\n{scoutLocVals}")
             # Merge the two lists and pick the locN best ones
+            endOfIterVals = np.zeros(scoutN + locN)
             np.concatenate((locationVals, scoutLocVals), axis=0, out=endOfIterVals)
             keptLocIdxs = np.argpartition(endOfIterVals, locN)[:locN]
             locKeptBools = (keptLocIdxs < locN)
@@ -778,7 +848,10 @@ class upperboundClass:
             locatBestidx = np.argmin(locationVals)
             locatBestVal = locationVals[locatBestidx]
             if locatBestVal < bestVal:
-                lastImprovementBCO = 0
+                if maxDepthBCO > 10 and locatBestVal > bestVal - 100:
+                    lastImprovementBCO += 1
+                else:
+                    lastImprovementBCO = 0
                 bestVal = locatBestVal
                 bestSol = locationSols[locatBestidx]
             else:
@@ -994,9 +1067,14 @@ class upperboundClass:
         bestBeeIdx = np.argmin(locBeeVals)
         return locBeeSols[bestBeeIdx], locBeeVals[bestBeeIdx]
 
-    def scoutAround(self, locSol, scoutN, scoutStepsN, scoutListN, scoutMaxNoImprovement):
-        locBeeSols = np.array([disturbSolution(locSol.copy(), scoutStepsN//2, self.lbVector, self.ubVector)
-                               for _ in range(scoutN)])
+    def scoutAround(self, locSol, scoutN, scoutStepsN, scoutListN, scoutMaxNoImprovement, addBase=False):
+        if addBase:
+            solList = [disturbSolution(locSol.copy(), scoutStepsN // 4, self.lbVector, self.ubVector)
+                            for _ in range(scoutN-1)]+[locSol.copy()]
+            locBeeSols = np.array(solList)
+        else:
+            locBeeSols = np.array([disturbSolution(locSol.copy(), scoutStepsN//4, self.lbVector, self.ubVector)
+                                   for _ in range(scoutN)])
         locBeeVals = self.searchLocations(locBeeSols, scoutN, scoutStepsN, scoutListN, scoutMaxNoImprovement)
         return locBeeSols, locBeeVals
 
@@ -1009,6 +1087,8 @@ class lowerboundClass:
         self.solution = lbParamDict.get("solutionBase",
                                         np.minimum(self.ubVector, np.maximum(tbw,self.lbVector)))
         self.lbMethod = lbParamDict.get("method", "screenlineBasedLP")
+        self.updateBool = lbParamDict.get("updateBool", False)
+        self.basicUpdateBool = lbParamDict.get("basicUpdateBool", False)
         if self.lbMethod == "screenlineBasedLP":
             if "solution" in lbParamDict:
                 self.firstRun = False
@@ -1027,25 +1107,30 @@ class lowerboundClass:
             self.firstRun = False
         elif self.lbMethod == "linearRelaxationScipy":
             self.firstRun = False
+
+        # extraParams are consistent across nodes
         self.extraParams = lbParamDict.get("extraParams", {})
         if self.lbMethod == "screenlineBasedLP" and not self.extraParams:
-            self.extraParams["ValueMatrix"] = aST.power(-1).multiply(np.divide(tComp, tp)).tocsr()
+            self.extraParams["ValueMatrix"] = aST.power(-1).multiply(tComp).tocsr()
+            # aST.power(-1).multiply(np.divide(tComp, tp)).tocsr()
         elif self.lbMethod == "linearRelaxation" and not self.extraParams:
-            self.extraParams["MIPGap"] = 0.5
+            self.makeModel(False)
         elif self.lbMethod == "linearRelaxationScipy" and not self.extraParams:
-            self.extraParams["MIPGap"] = 0.05
+            self.makeModelScipy()
+
+        # extraVars change from node to node
         self.extraVars = lbParamDict.get("extraVars", {})
 
         if self.lbMethod == "linearRelaxation" and not self.extraVars:
-            self.makeModel(False)
-        if self.lbMethod == "linearRelaxationScipy" and not self.extraVars:
-            self.makeModelScipy()
+            self.extraVars["MIPGap"] = 0.5
+        elif self.lbMethod == "linearRelaxationScipy" and not self.extraVars:
+            self.extraVars["MIPGap"] = 0.5
+
         self.value = lbParamDict.get("value",0)
         self.newConstraint = lbParamDict.get("newConstraint",(0,0,0))
         self.markedSls = np.empty(1)
         self.markSls()
-        self.updateBool = lbParamDict.get("updateBool", True)
-        self.basicUpdateBool = lbParamDict.get("basicUpdateBool", True)
+
         if self.firstRun:
             self.prepForRun()
 
@@ -1082,7 +1167,7 @@ class lowerboundClass:
                 firstRun=self.firstRun,
                 lbMethod=self.lbMethod,
                 extraParams=self.extraParams,
-                extraVars=self.extraVars,
+                extraVars=self.extraVars.copy(),
                 value=self.value,
                 newConstraint=self.newConstraint,
                 updateBool=self.updateBool,
@@ -1107,6 +1192,31 @@ class lowerboundClass:
                 basicUpdateBool=self.basicUpdateBool
             )
         return new_copy
+
+    def changeType(self, newMethod, newMethodParameters=None, newMethodVars=None):
+        if self.lbMethod == "screenlineBasedLP":
+            del self.solutionFinal, self.solutionTranspose
+        if newMethodParameters is None:
+            newMethodParameters = {}
+        if newMethodVars is None:
+            newMethodVars = {}
+        self.lbMethod = newMethod
+        self.extraParams = newMethodParameters
+        self.extraVars = newMethodVars
+        if newMethod == "linearRelaxation":
+            if "MIPGap" not in newMethodVars:
+                self.extraVars["MIPGap"] = 0.05
+            self.makeModel(False)
+        elif newMethod == "linearRelaxationScipy":
+            if "MIPGap" not in newMethodVars:
+                self.extraVars["MIPGap"] = 0.05
+            self.makeModelScipy()
+        else:
+            self.firstRun = True
+            self.solutionTranspose = aST.copy()
+            self.solutionTranspose.data = self.solution[self.solutionTranspose.indices]
+            self.solutionFinal = self.solutionTranspose.copy().transpose().tocsr()
+
 
 
     def prepForRun(self):
@@ -1182,7 +1292,7 @@ class lowerboundClass:
 
 
     def linearRelaxBound(self):
-        clusterWeights = self.extraVars["clusterWeights"]
+        clusterWeights = self.extraParams["clusterWeights"]
         lbnz = self.lbVector.nonzero()[0]
         ubnz = (self.ubVector-baseUb1).nonzero()[0]
         for idx in lbnz:
@@ -1192,12 +1302,19 @@ class lowerboundClass:
         for idx in range(nrOfClusters):
             clusterWeights[idx].Start = self.solution[idx]
 
-        m = self.extraVars["model"]
+        m = self.extraParams["model"]
         # m.reset()
-        # m.setParam(GRB.Param.MIPGap, self.extraParams["MIPGap"])
+        m.setParam("MIPGap", self.extraVars["MIPGap"])
+        m.setParam("BarConvTol", self.extraVars["MIPGap"])
+        m.setParam("BarQCPConvTol", self.extraVars["MIPGap"])
+        m.setParam("OptimalityTol", min(self.extraVars["MIPGap"],0.01))
+        # m.setParam("MIPGapAbs", 100000)
+
 
         m.optimize()
-        self.value = m.ObjBound
+        curVal = m.ObjBound
+        if curVal > self.value:
+            self.value = m.ObjBound
         self.solution = np.array([clusterWeights[clusterIdx].X
                                   for clusterIdx in range(nrOfClusters)])
         for idx in lbnz:
@@ -1242,6 +1359,7 @@ class lowerboundClass:
 
 
     def screenlineBasedLPBound(self):
+
         objVal = 0
         # if not self.solutionFinal:
         #     self.solutionFinal = aTS.copy()
@@ -1280,11 +1398,11 @@ class lowerboundClass:
                 sumOfTimes += (endTimeSl - startTimeSl)
                 if (task[-1]+1) % 100 == 0 and self.updateBool:
                     print(f"average time per screenline is {sumOfTimes/(task[-1]+1)}")
-        # results = [(task[-1],) + self.optimizeTrip(task) for task in tasks]
-        # # Use multiprocessing.Pool to parallelize the processing of trips
-        # with Pool() as pool:
-        #     # Map each task to a process in the pool and gather results
-        #     results = pool.map(process_trip, tasks)
+    # results = [(task[-1],) + self.optimizeTrip(task) for task in tasks]
+    # # Use multiprocessing.Pool to parallelize the processing of trips
+    # with Pool() as pool:
+    #     # Map each task to a process in the pool and gather results
+    #     results = pool.map(process_trip, tasks)
 
         # Update solutionFinal and accumulate objVal with results
 
@@ -1292,37 +1410,16 @@ class lowerboundClass:
         for slIdx, listOrder, tourOrder, slSol, slVal in results:
             startIdx = self.solutionTranspose.indptr[slIdx]
             endIdx = self.solutionTranspose.indptr[slIdx+1]
-
-            self.solutionTranspose.data[startIdx:endIdx] = slSol
-            self.solutionTranspose.indices[startIdx:endIdx] = tourOrder
+            self.solutionTranspose.data[startIdx:endIdx][listOrder] = slSol
 
         self.solutionFinal = self.solutionTranspose.copy().transpose().tocsr()
-
-
-        # dataList = []
-        # rowList = []
-        # colList = []
-        # for slIdx, tourOrder, slSol, slVal in results:
-        #     objVal += slVal
-        #     dataList += slSol.tolist()
-        #     rowList += [slIdx]*len(tourOrder)
-        #     colList += tourOrder.tolist()
-        # self.solutionFinal = scipy.sparse.csc_matrix((dataList, (rowList, colList))).transpose()
-
+        avgTourWeight2 = self.solutionFinal.sum(axis=1).flatten()
+        self.solution = np.divide(avgTourWeight2, slsOnTour)
         self.evaluateSolution()
-        # lp = LineProfiler()
-        # lp_wrapper = lp(self.evaluateSolution)
-        # lp_wrapper()
-        # lp.print_stats()
-        # objVal = 0
-        # if not self.solutionFinal:
-        #     self.solutionFinal = aTS.copy()
-        # for slIdx in self.markedSls:
-        #     tourOrder, slSol, slVal = self.optimizeTrip(slIdx)
-        #     objVal += slVal
-        #     for tourIdx in range(len(tourOrder)):
-        #         self.solutionFinal[tourOrder[tourIdx],slIdx] = slSol[tourIdx]
-        # self.value = objVal
+
+
+
+
 
 
     def listMakerSls(self, slIdx):
@@ -1447,11 +1544,11 @@ class lowerboundClass:
 
     def makeModel(self, integerBool):
         m = gp.Model(f"Upperbound: {upperbound}")
-        # m.setParam("OutputFlag", 0)
+        m.setParam("OutputFlag", int(self.updateBool))
         # m.setParam(GRB.Param.Presolve, 0)
         m.setParam(GRB.Param.DisplayInterval, 10)
-        # m.setParam(GRB.Param.Method, 3)
-        # m.setParam("ConcurrentMethod", 3)
+        # m.setParam(GRB.Param.Method, 2)
+        # m.setParam("ConcurrentMethod", 2)
         # m.setParam(GRB.Param.BarIterLimit, 0)
         if integerBool:
             tourWeight = m.addVars(nrOfClusters, vtype=GRB.INTEGER, ub=self.ubVector.tolist(), lb=self.lbVector.tolist(), name="clusterWeights")
@@ -1494,11 +1591,11 @@ class lowerboundClass:
                          totalError))  # + gp.quicksum(largeErrors[ODpair] for ODpair in toursDF.index.tolist())
         m.setObjective(objective, GRB.MINIMIZE)
         m.update()
-        self.extraVars["model"] = m
-        self.extraVars["clusterWeights"] = tourWeight
-        self.extraVars["totalError"] = totalError
-        self.extraVars["clusterDeviation"] = tourDeviation
-        self.extraVars["absoluteErrors"] = absoluteErrors
+        self.extraParams["model"] = m
+        self.extraParams["clusterWeights"] = tourWeight
+        self.extraParams["totalError"] = totalError
+        self.extraParams["clusterDeviation"] = tourDeviation
+        self.extraParams["absoluteErrors"] = absoluteErrors
 
     def makeModelScipy(self):
         # x = (tw, tdev, slAbs)
@@ -1579,14 +1676,20 @@ class nodeClass:
         )
         return new_copy
 
+
+    def changeType(self, newUbType, newUbParameters, newLbType, newLbParameters, newLbVars=None):
+        self.ubClass.changeType(newUbType, newUbParameters)
+        self.lbClass.changeType(newLbType, newLbParameters, newLbVars)
+
+
     def bound(self):
         lbStartTime = time.time()
         self.lbClass.bound()
         lbTotalTime = time.time() - lbStartTime
-        if self.tag[0] == 0:
-            self.ubClass.solution = np.clip(np.round(self.lbClass.solution), self.lbClass.lbVector, self.lbClass.ubVector)
-        print(self.lbClass.value)
-        print(np.sum(np.abs(self.lbClass.solution - self.ubClass.solution)))
+        # if self.tag[0] == 0:
+        #     self.ubClass.solution = np.clip(np.round(self.lbClass.solution), self.lbClass.lbVector, self.lbClass.ubVector)
+        # print(self.lbClass.value)
+        # print(np.sum(np.abs(self.lbClass.solution - self.ubClass.solution)))
         ubStartTime = time.time()
         self.ubClass.bound()
         ubTotalTime = time.time() - ubStartTime
@@ -1717,18 +1820,44 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
     updateBoolBranch = setUpdateBools(bnbParamDict, lbParamDict, ubParamDict, ubDeepParamDict, lbDeepParamDict)
     # ub = upperboundClass(ubParamDict)
     # lb = lowerboundClass(lbParamDict)
+
+
+    callibrationLBClass = lowerboundClass({"method":"linearRelaxation"})
+    callibrationLBClass.extraVars["MIPGap"] = 0.00001
+    callibrationLBClass.bound()
+    callibrationVal = callibrationLBClass.value
+    callibrationSol = callibrationLBClass.solution.copy()
+    del callibrationLBClass
+
+    ubParamDict["calibrationValue"] = callibrationVal
+    ubParamDict["solution"] = np.round(callibrationSol)
     baseNode = nodeClass(ubParamDict, lbParamDict, splitParamDict, nodeTag)
 
     branchMeth = bnbParamDict['branchMethod']
     maxMIPGap = bnbParamDict["maxMIPGap"]
-    debugDict = {nodeTag:[baseNode,[]]}
+    # debugDict = {nodeTag:[baseNode,[]]}
+    baseNode.lbClass.extraVars["MIPGap"] = maxMIPGap
     if updateBoolBranch:
         print("Bounding root node, this will take a while")
+    if baseNode.ubClass.ubMethod == "BCO":
+        print("Using Taboo Search to find a starting solution for Bee Colony Optimization")
+        baseSolFinder = upperboundClass({"method":"tabooSearch","solution":ubParamDict["solution"],
+                                         "methodParameters":extraParamsTabooFirst})
+        baseSolFinder.updateBool = False
+        baseSolFinder.basicUpdateBool = False
+        bcoTabTimeStart = time.time()
+        baseSolFinder.bound()
+        bcoTabTotTime = time.time() - bcoTabTimeStart
+        baseNode.ubClass.solution = baseSolFinder.solution.copy()
+        print(f"Bee Colony Optimization will start with a solution with value: {baseSolFinder.value}")
+        del baseSolFinder
+    else:
+        bcoTabTotTime = 0
     ubVal, ubSol, lbVal, lbTime, ubTime = baseNode.bound()
     lbValArray[nodeID] = lbVal
     lbTimeArray[nodeID] = lbTime
     ubValArray[nodeID] = ubVal
-    ubTimeArray[nodeID] = ubTime
+    ubTimeArray[nodeID] = ubTime + bcoTabTotTime
 
 
 
@@ -1775,13 +1904,15 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
         # create new nodes
         newMIPGap = min(maxMIPGap, branchGap)
         lbNode, lbTag, ubNode, ubTag, nodeID = branchNode.split(lbConstr, ubConstr, nodeID, newMIPGap)
-        lbConstrList = debugDict[branchNode.tag][1].copy()
-        lbConstrList.append(lbConstr)
-        debugDict[lbTag] = [lbNode, lbConstrList]
-        ubConstrList = debugDict[branchNode.tag][1].copy()
-        ubConstrList.append(ubConstr)
-        debugDict[ubTag] = [ubNode, ubConstrList]
-
+        # lbConstrList = debugDict[branchNode.tag][1].copy()
+        # lbConstrList.append(lbConstr)
+        # debugDict[lbTag] = [lbNode, lbConstrList]
+        # ubConstrList = debugDict[branchNode.tag][1].copy()
+        # ubConstrList.append(ubConstr)
+        # debugDict[ubTag] = [ubNode, ubConstrList]
+        if updateBoolBranch:
+            print(f"Branched on node {branchTag} (lb:{branchLbVal:.3f}, ub:{branchUbVal:.3f}),"
+                  f" creating the following nodes:")
         # bound new nodes
         ubValLb, ubSolLb, lbValLb, lbTime, ubTime = lbNode.bound()
         relNodeId = lbNode.tag[0]
@@ -1789,7 +1920,8 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
         lbTimeArray[relNodeId] = lbTime
         ubValArray[relNodeId] = ubValLb
         ubTimeArray[relNodeId] = ubTime
-
+        if updateBoolBranch:
+            print(f"\t {lbTag} \t(lb:{lbValLb:.3f}, ub:{ubValLb:.3f}), \ttourweight[{lbConstr[1]}]>={lbConstr[2]}")
         ubValUb, ubSolUb, lbValUb, lbTime, ubTime = ubNode.bound()
         relNodeId = ubNode.tag[0]
         lbValArray[relNodeId] = lbValUb
@@ -1798,10 +1930,7 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
         ubTimeArray[relNodeId] = ubTime
 
         if updateBoolBranch:
-            print(f"Branched on node {branchTag} (lb:{branchLbVal:.3f}, ub:{branchUbVal:.3f}),"
-                  f" creating the following nodes:\n"
-                  f"\t {lbTag} \t(lb:{lbValLb:.3f}, ub:{ubValLb:.3f}), \ttourweight[{lbConstr[1]}]>={lbConstr[2]}\n"
-                  f"\t {ubTag} \t(lb:{lbValUb:.3f}, ub:{ubValUb:.3f}), \ttourweight[{ubConstr[1]}]<={ubConstr[2]}")
+            print(f"\t {ubTag} \t(lb:{lbValUb:.3f}, ub:{ubValUb:.3f}), \ttourweight[{ubConstr[1]}]<={ubConstr[2]}")
         # update global upperbound
         if ubValLb < globalUb[-1]:
             globalUb = [lbTag, ubSolLb, ubValLb]
@@ -1948,38 +2077,99 @@ def superClustering(superclustersfile, superclustersOutfile, adjcsfile):
     scipy.sparse.save_npz(adjcsfile, superclusterSparceMatrix)
     return
 
+def writeTestToExcel(ubMethod, lbMethod):
+    # Create the DataFrame
+    data = {
+        "lbTime": lbTimeArray,
+        "lbVal": lbValArray,
+        "ubTime": ubTimeArray,
+        "ubVal": ubValArray
+    }
+    df = pd.DataFrame(data)
+    treeSize = lbTimeArray.size
+    leafSize = (treeSize+1)//2
+    # Calculate column-wise statistics
+    headers = [
+            "mean",
+            "std",
+            "end mean",
+            "end std",
+            "minimal",
+            "maximum",
+            "end minimal",
+            "end maximum"
+        ]
+
+    summary_data = {}
+    for column in df.columns:
+        column_values = data[column]
+        summary_data[column] = [
+            np.mean(column_values),
+            np.std(column_values),
+            np.mean(column_values[-leafSize:]),
+            np.std(column_values[-leafSize:]),
+            np.min(column_values),
+            np.max(column_values),
+            np.min(column_values[-leafSize:]),
+            np.max(column_values[-leafSize:])
+        ]
+
+    # Convert summary data to DataFrame
+    summary_df = pd.DataFrame(summary_data, index=headers)
+
+    # Concatenate summary rows and data
+    final_df = pd.concat([summary_df, df], ignore_index=False)
+    curTime = datetime.now().strftime("%d_%m_%y_%H-%M-%S")
+    # Save to Excel
+    output_file = f"{translationDict[lbMethod]}_{translationDict[ubMethod]}_data_{curTime}.xlsx"
+    final_df.to_excel(output_file, index=True)
+
+
+# ideas for parameters
+# BCO, very high max depth as first, change max no Improvement to max no large improvement with boundry (100?)
 
 
 extraParamsBCO = {"locN":10, "topLocN":3,
-                  "scoutN":3, "scoutStepsN":25000, "scoutMaxNoImprovement":1000, "scoutListN":800,
+                  "scoutN":3, "scoutStepsN":50000, "scoutMaxNoImprovement":3000, "scoutListN":1600,
                   "disturbN":2500,"topLocWorkerN":25,"lowWorkerN":10,
-                  "workerStepsN":2500,"workerMaxNoImprovement":250,"workerListN":200,
-                  "maxDepthBCO":15,"maxTimeBCO":12000,"maxNoImprovementBCO":4,"maxTimeTaboo":150}
+                  "workerStepsN":3000,"workerMaxNoImprovement":750,"workerListN":400,
+                  "maxDepthBCO":25,"maxTimeBCO":12000,"maxNoImprovementBCO":4,"maxTimeTaboo":150}
 
-extraParamsBCOHighLoc = {"locN":100, "topLocN":24,
-                          "scoutN":100, "scoutStepsN":250, "scoutMaxNoImprovement":100, "scoutListN":80,
+extraParamsBCOHighLoc = {"locN":50, "topLocN":12,
+                          "scoutN":50, "scoutStepsN":2500, "scoutMaxNoImprovement":1250, "scoutListN":550,
                           "disturbN":25,"topLocWorkerN":15,"lowWorkerN":5,
-                          "workerStepsN":25,"workerMaxNoImprovement":25,"workerListN":20,
-                          "maxDepthBCO":15,"maxTimeBCO":1200,"maxNoImprovementBCO":4,"maxTimeTaboo":15}
+                          "workerStepsN":300,"workerMaxNoImprovement":150,"workerListN":80,
+                          "maxDepthBCO":10,"maxTimeBCO":1200,"maxNoImprovementBCO":4,"maxTimeTaboo":15}
+
+extraParamsBCOTotal = {"maxCallDiff":100000, "farDict":extraParamsBCO, "closeDict":extraParamsBCOHighLoc}
 
 extraParamsTabooFirst = {"maxDepth": 750000, "tabooLength": 10000,
-                                                       "maxNoImprovement": 8000, "maxTimeTaboo": 600,
-                                                       "printDepth": 200000, "recallDepth": 100000}
+                                                       "maxNoImprovement": 18000, "maxTimeTaboo": 600,
+                                                       "printDepth": 200000, "recallDepth": 250000}
 
 extraParamsTabooSecond = {"maxDepth": 75000, "tabooLength": 10000,
-                                                                "maxNoImprovement": 8000, "maxTimeTaboo": 60,
+                                                                "maxNoImprovement": 18000, "maxTimeTaboo": 60,
                                                                 "printDepth": 20000, "recallDepth": 100000}
 
 extraParamsTabooFake = {"maxDepth": 0, "tabooLength": 0,
                                                                 "maxNoImprovement": 0, "maxTimeTaboo": 60,
                                                                 "printDepth": 20000, "recallDepth": 100000}
 
+translationDict = {
+    "linearRelaxation":"LR",
+    "screenlineBasedLP":"SL",
+    "BCO":"BCO",
+    "tabooSearch":"Taboo",
+    "none":"None"
+}
+
 if __name__ == '__main__':
     parametersType = -5
-    lbValArray = np.zeros(1023)
-    lbTimeArray = np.zeros(1023)
-    ubValArray = np.zeros(1023)
-    ubTimeArray = np.zeros(1023)
+    nodeLimit = 63
+    lbValArray = np.zeros(nodeLimit)
+    lbTimeArray = np.zeros(nodeLimit)
+    ubValArray = np.zeros(nodeLimit)
+    ubTimeArray = np.zeros(nodeLimit)
 
 
     if parametersType == 1:
@@ -2157,33 +2347,25 @@ if __name__ == '__main__':
         # for i in range(1000):
         #     lp_wrapper(curVec, 50, lbV, ubV)
         # lp.print_stats()
-        upperboundParameterDict = {"method":"tabooSearch",
-                                   "methodParameters":extraParamsTabooFake}     # tabooSearch BCO
-        lowerboundParameterDict = {"method":"linearRelaxation"}                 # linearRelaxation screenlineBasedLP
-        upperBoundDeeperParameterDict = {"method":"tabooSearch",
-                                            "methodParameters":extraParamsTabooFake}
-        lowerBoundDeeperParameterDict = {"method":"linearRelaxation"}
-        splitInequalityParameterDict = {"ineqType":"tourBased", "lbOutputType":"array"}
+        # extraParamsTabooFirst extraParamsTabooSecond extraParamsTabooFake extraParamsBCO extraParamsBCOHighLoc
+        # extraParamsBCOTotal
+        upperboundParameterDict = {"method":"BCO",
+                                   "methodParameters":extraParamsBCOTotal}     # tabooSearch BCO none
+        lowerboundParameterDict = {"method":"screenlineBasedLP"}                 # linearRelaxation screenlineBasedLP
+        upperBoundDeeperParameterDict = {"method":"BCO",
+                                            "methodParameters":extraParamsBCOTotal}
+        lowerBoundDeeperParameterDict = {"method":"screenlineBasedLP"}
+        splitInequalityParameterDict = {"ineqType":"tourBased", "lbOutputType":"csr"}
         branchAndBoundParameterDict = {"branchMethod":"breadthFirst",
-                                       "maxNodes":1023, "maxBranchDepth":9, "maxTime":36000,
-                                       "minObjGap":0, "minPercObjGap":0.05, "maxMIPGap":0.0001,
+                                       "maxNodes":nodeLimit, "maxBranchDepth":5, "maxTime":36000,
+                                       "minObjGap":0, "minPercObjGap":0.05, "maxMIPGap":0.00001,
                                        "ubUpdates":False, "ubBasicUpdates":False,
                                        "lbUpdates":False, "lbBasicUpdates":False,
                                        "branchingUpdates":True}
+        # writeTestToExcel(upperboundParameterDict["method"],lowerboundParameterDict["method"])
         branchAndBound(upperboundParameterDict, lowerboundParameterDict, splitInequalityParameterDict,
                        branchAndBoundParameterDict, upperBoundDeeperParameterDict, lowerBoundDeeperParameterDict)
-        # Create the DataFrame
-        data = {
-            "lbTime": lbTimeArray,
-            "lbVal": lbValArray,
-            "ubTime": ubTimeArray,
-            "ubVal": ubValArray
-        }
-        df = pd.DataFrame(data)
-
-        # Save to Excel
-        output_file = 'LR_None_data.xlsx'
-        df.to_excel(output_file, index=False)
+        writeTestToExcel(upperboundParameterDict["method"],lowerboundParameterDict["method"])
     else:
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
@@ -2211,7 +2393,7 @@ if __name__ == '__main__':
         lowerBoundDeeperParameterDict = {"method":"screenlineBasedLP"}
         splitInequalityParameterDict = {"ineqType":"tourBased", "lbOutputType":"csr"}
         branchAndBoundParameterDict = {"branchMethod":"globalLb", "maxNodes":1000, "maxBranchDepth":100, "maxTime":3600,
-                                       "minObjGap":0, "minPercObjGap":0.05, "maxMIPGap":0.005,
+                                       "minObjGap":0, "minPercObjGap":0.05, "maxMIPGap":0.5,
                                        "ubUpdates":False, "ubBasicUpdates":False,
                                        "lbUpdates":False, "lbBasicUpdates":False,
                                        "branchingUpdates":True}
@@ -2241,3 +2423,9 @@ if __name__ == '__main__':
 
     # branchAndBound(upperboundParameterDict, lowerboundParameterDict,
     #               splitInequalityParameterDict, branchAndBoundParameterDict)
+
+
+
+
+
+

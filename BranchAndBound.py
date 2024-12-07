@@ -63,6 +63,8 @@ slsOnTour = np.empty(1)
 slMaxVal = np.empty(1)
 tbwPtrs = np.empty(1)
 
+singleTComp = 1
+
 upperbound = 5
 penalty = 1
 measuringBool = False
@@ -172,7 +174,7 @@ def readInModelParams(interceptPath, screenlinesUsedBool, screenlinesPath, tourD
 
 def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tourDictPath, tourOnODDictPath, sopath,
                        topath, tspath, oopath, sspath):
-    global aTO, aOT, aSO, aTS, aST, nOD, cl, tbw, tp, maxZoneNR, nrOfClusters, baseWeightSum, ODNames, \
+    global aTO, aOT, aSO, aTS, aST, nOD, cl, tbw, tp, maxZoneNR, nrOfClusters, baseWeightSum, ODNames, singleTComp,\
         tourNames, screenlineNames, penalty, tComp, slMaxDiff, baseUb1, slSizes, slsOnTour,nrOfSls, slMaxVal, tbwPtrs
     sld = {}
     cd = {}
@@ -239,6 +241,7 @@ def readInModelParams2(interceptPath, screenlinesUsedBool, screenlinesPath, tour
     slsOnTour = np.array([max(1,aTS._getrow(tourIdx).indices.size) for tourIdx in range(nrOfClusters)])
     tComp = np.array([1/(max(1,aTS._getrow(tourIdx).indices.size)*baseWeightSum) for tourIdx in range(nrOfClusters)])
     tComp *= 10
+    singleTComp = 10/baseWeightSum
     aST = aTS.tocsc(copy=True).transpose()
     nOD = scipy.sparse.load_npz(oopath)
     # nSl = scipy.sparse.load_npz(sspath)
@@ -522,8 +525,8 @@ class upperboundClass:
             newAbs = abs(newDiff)
             newIncrAbs = abs(newDiff+1)
             newDecrAbs = abs(newDiff-1)
-            incrComp = ((newIncrAbs-newAbs)-(incrAbs-curAbs))*tComp[nextStepTIdx]
-            decrComp = ((newDecrAbs-newAbs)-(decrAbs-curAbs))*tComp[nextStepTIdx]
+            incrComp = ((newIncrAbs-newAbs)-(incrAbs-curAbs))*singleTComp
+            decrComp = ((newDecrAbs-newAbs)-(decrAbs-curAbs))*singleTComp
             changeDiffList[0,nextStepTIdx] += decrComp
             changeDiffList[1,nextStepTIdx] += incrComp
 
@@ -912,7 +915,7 @@ class upperboundClass:
         sT = time.time()
         if solutionList is None:
             solutionList = self.solution
-        value = np.sum(np.abs(solutionList - tbw)) / baseWeightSum
+        value = singleTComp * np.sum(np.abs(solutionList - tbw))
 
 
         # solCounts = [0]*screenlineNames.size
@@ -1194,28 +1197,26 @@ class lowerboundClass:
         return new_copy
 
     def changeType(self, newMethod, newMethodParameters=None, newMethodVars=None):
-        if self.lbMethod == "screenlineBasedLP":
-            del self.solutionFinal, self.solutionTranspose
+
         if newMethodParameters is None:
             newMethodParameters = {}
         if newMethodVars is None:
             newMethodVars = {}
         self.lbMethod = newMethod
-        self.extraParams = newMethodParameters
+
         self.extraVars = newMethodVars
         if newMethod == "linearRelaxation":
             if "MIPGap" not in newMethodVars:
                 self.extraVars["MIPGap"] = 0.05
-            self.makeModel(False)
         elif newMethod == "linearRelaxationScipy":
             if "MIPGap" not in newMethodVars:
                 self.extraVars["MIPGap"] = 0.05
-            self.makeModelScipy()
         else:
             self.firstRun = True
             self.solutionTranspose = aST.copy()
             self.solutionTranspose.data = self.solution[self.solutionTranspose.indices]
             self.solutionFinal = self.solutionTranspose.copy().transpose().tocsr()
+            self.extraParams["ValueMatrix"] = aST.power(-1).multiply(tComp).tocsr()
 
 
 
@@ -1299,15 +1300,15 @@ class lowerboundClass:
             clusterWeights[idx].lb = self.lbVector[idx]
         for idx in ubnz:
             clusterWeights[idx].ub = self.ubVector[idx]
-        for idx in range(nrOfClusters):
-            clusterWeights[idx].Start = self.solution[idx]
+        # for idx in range(nrOfClusters):
+            # clusterWeights[idx].Start = self.solution[idx]
 
         m = self.extraParams["model"]
         # m.reset()
         m.setParam("MIPGap", self.extraVars["MIPGap"])
-        m.setParam("BarConvTol", self.extraVars["MIPGap"])
-        m.setParam("BarQCPConvTol", self.extraVars["MIPGap"])
-        m.setParam("OptimalityTol", min(self.extraVars["MIPGap"],0.01))
+        # m.setParam("BarConvTol", self.extraVars["MIPGap"])
+        # m.setParam("BarQCPConvTol", self.extraVars["MIPGap"])
+        # m.setParam("OptimalityTol", min(self.extraVars["MIPGap"],0.01))
         # m.setParam("MIPGapAbs", 100000)
 
 
@@ -1558,7 +1559,7 @@ class lowerboundClass:
         totalError = m.addVar(vtype=GRB.CONTINUOUS, lb=0.0, ub=upperbound * baseWeightSum, name="Deviation")
         # largeErrors = m.addVars(toursDF.index.tolist(), vtype=GRB.SEMICONT, ub=upperbound-1, lb=0.0, name="LargeErrors")
         tourDeviation = m.addVars(nrOfClusters,
-                                  vtype=GRB.CONTINUOUS, lb=(-tbw).tolist(), ub=((upperbound - 1.0)*tbw).tolist(), name="clusterDeviation")
+                                  vtype=GRB.CONTINUOUS, lb=(np.zeros(nrOfClusters)).tolist(), ub=((upperbound - 1.0)*tbw).tolist(), name="clusterDeviation")
         absoluteErrors = m.addVars(nrOfSls, vtype=GRB.CONTINUOUS, lb=0.0, name="AbsoluteErrors")
         # absoluteErrors = m.addVars(zones,zones,  vtype=GRB.CONTINUOUS, lb=0.0, name="AbsoluteErrors" )
 
@@ -1582,7 +1583,7 @@ class lowerboundClass:
         #              name="Large errors in tour")
         # m.addConstr(totalError == gp.quicksum(tourDeviation[idx]*tourDeviation[idx]*tComp[idx]/tbw[idx] for idx in range(nrOfClusters)), name=f"total error")
         m.addConstr(totalError == gp.quicksum(
-            tourDeviation[idx] * tComp[idx] for idx in range(nrOfClusters)),
+            tourDeviation[idx] * singleTComp for idx in range(nrOfClusters)),
                     name=f"total error")
 
 
@@ -1677,17 +1678,26 @@ class nodeClass:
         return new_copy
 
 
-    def changeType(self, newUbType, newUbParameters, newLbType, newLbParameters, newLbVars=None):
+    def changeType(self, newUbType, newUbParameters, newLbType, newLbParameters, newLbVars=None, newSplitType=None):
         self.ubClass.changeType(newUbType, newUbParameters)
         self.lbClass.changeType(newLbType, newLbParameters, newLbVars)
+        if newSplitType is not None:
+            self.ineqType = newSplitType
+        if newLbType == "screenlineBasedLP":
+            self.lbOutputType = "csr"
+        else:
+            self.lbOutputType = "array"
 
 
     def bound(self):
         lbStartTime = time.time()
         self.lbClass.bound()
         lbTotalTime = time.time() - lbStartTime
+        if self.lbClass.lbMethod != "screenlineBasedLP":
+            self.ubClass.solution = np.round(self.lbClass.solution).copy()
         # if self.tag[0] == 0:
-        #     self.ubClass.solution = np.clip(np.round(self.lbClass.solution), self.lbClass.lbVector, self.lbClass.ubVector)
+        #     self.ubClass.solution = np.clip(np.round(self.lbClass.solution),
+        #                                       self.lbClass.lbVector, self.lbClass.ubVector)
         # print(self.lbClass.value)
         # print(np.sum(np.abs(self.lbClass.solution - self.ubClass.solution)))
         ubStartTime = time.time()
@@ -1812,6 +1822,28 @@ def setUpdateBools(bnbParamDict, lbParamDict, ubParamDict, ubDeepParamDict, lbDe
 
     return bnbParamDict["branchingUpdates"]
 
+
+def setUpdateBoolsSinglePair(bnbParamDict, lbParamDict, ubParamDict):
+    lbBool = bnbParamDict["lbUpdates"]
+    ubBool = bnbParamDict["ubUpdates"]
+    lbBasicBool = bnbParamDict["lbBasicUpdates"]
+    ubBasicBool = bnbParamDict["ubBasicUpdates"]
+    lbParamDict["updateBool"] = lbBool
+    ubParamDict["updateBool"] = ubBool
+    lbParamDict["basicUpdateBool"] = lbBasicBool
+    ubParamDict["basicUpdateBool"] = ubBasicBool
+
+    return bnbParamDict["branchingUpdates"]
+
+
+
+def extractDicts(stage, superDict):
+    localDict = superDict[stage]
+    localBnBDict = localDict["bnb"]
+    localSplitDict = localDict["split"]
+    localUbDict = localDict["ub"]
+    localLbDict = localDict["lb"]
+    return localBnBDict, localSplitDict, localUbDict, localLbDict
 
 
 def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDeepParamDict, lbDeepParamDict):
@@ -1963,6 +1995,234 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
 
 
     return globalUb, globalLb
+
+
+
+def multiStageBranchAndBound(totalParameterDict):
+    nodeID = 0
+    nodeTag = (nodeID, 0)
+    calBnBParamDict, calSplitParamDict, calUbParamDict, calLbParamDict = extractDicts(0, totalParameterDict)
+    updateBoolBranch = setUpdateBoolsSinglePair(calBnBParamDict, calLbParamDict, calUbParamDict)
+    # ub = upperboundClass(ubParamDict)
+    # lb = lowerboundClass(lbParamDict)
+    calNode = nodeClass(calUbParamDict, calLbParamDict, calSplitParamDict, nodeTag)
+    lbStartTime = time.time()
+    calNode.lbClass.bound()
+    lbTime = time.time() - lbStartTime
+    callibrationVal = calNode.lbClass.value
+    callibrationSol = calNode.lbClass.solution.copy()
+    # callibrationLBClass = lowerboundClass({"method":"linearRelaxation"})
+    # callibrationLBClass.extraVars["MIPGap"] = 0.00001
+    # callibrationLBClass = lowerboundClass(calLbParamDict)
+    # callibrationLBClass.bound()
+    # callibrationVal = callibrationLBClass.value
+    # callibrationSol = callibrationLBClass.solution.copy()
+    # del callibrationLBClass
+
+    calNode.ubClass.calibrationValue = callibrationVal
+    calNode.ubClass.solution = np.round(callibrationSol)
+
+
+    # branchMeth = bnbParamDict['branchMethod']
+    # maxMIPGap = bnbParamDict["maxMIPGap"]
+    # # debugDict = {nodeTag:[baseNode,[]]}
+    # baseNode.lbClass.extraVars["MIPGap"] = maxMIPGap
+    if updateBoolBranch:
+        print("Performing first step callibration, this will take a while")
+    if calNode.ubClass.ubMethod == "BCO":
+        print("Using Taboo Search to find a starting solution for Bee Colony Optimization")
+        baseSolFinder = upperboundClass({"method":"tabooSearch","solution":calNode.ubClass.solution,
+                                         "methodParameters":extraParamsTabooFirst})
+        baseSolFinder.updateBool = False
+        baseSolFinder.basicUpdateBool = False
+        bcoTabTimeStart = time.time()
+        baseSolFinder.bound()
+        bcoTabTotTime = time.time() - bcoTabTimeStart
+        calNode.ubClass.solution = baseSolFinder.solution.copy()
+        print(f"Bee Colony Optimization will start with a solution with value: {baseSolFinder.value}")
+        del baseSolFinder
+    else:
+        bcoTabTotTime = 0
+    ubStartTime = time.time()
+    calNode.ubClass.bound()
+    ubTime = time.time() - ubStartTime
+    ubSol = calNode.ubClass.solution.copy()
+    ubVal = calNode.ubClass.value
+    lbVal = calNode.lbClass.value
+    lbValArray[nodeID] = lbVal
+    lbTimeArray[nodeID] = lbTime
+    ubValArray[nodeID] = ubVal
+    ubTimeArray[nodeID] = ubTime + bcoTabTotTime
+
+
+
+    # Initialize bounds and dicts
+    globalUb = [nodeTag, ubSol, ubVal]
+    globalLb = [nodeTag, lbVal]
+    lbValDict = {nodeTag:lbVal}
+    ubValDict = {nodeTag:ubVal}
+    nodeDict = {nodeTag:calNode}
+    nodeID += 1
+
+
+    needReset = []
+    nrOfStages = len(totalParameterDict)
+    breakpointsArray = np.zeros(nrOfStages, dtype=int)
+    breakpointsArray[0] = 1
+    for stageIdx in range(1, nrOfStages):
+        # Change all nodes to the correct types for this stage
+        bnbParamDict, SplitParamDict, ubParamDict, lbParamDict = extractDicts(stageIdx, totalParameterDict)
+        updateBoolBranch = setUpdateBoolsSinglePair(bnbParamDict, lbParamDict, ubParamDict)
+        branchMeth = bnbParamDict['branchMethod']
+        maxMIPGap = bnbParamDict["maxMIPGap"]
+
+        for nodeToChange in nodeDict.values():
+            nodeToChange.changeType(newUbType=ubParamDict["method"],
+                                    newUbParameters=ubParamDict["methodParameters"],
+                                    newLbType=lbParamDict["method"],
+                                    newLbParameters=lbParamDict.get("methodParameters",{}))
+        if lbParamDict["method"] == "screenlineBasedLP":
+            taskDict = {}
+            for nodeToChange in nodeDict.values():
+                if taskDict:
+                    nodeToChange.lbClass.markSls()
+                    nodeToChange.lbClass.extraParams["tasks"] = taskDict
+                else:
+                    nodeToChange.lbClass.markSls()
+                    nodeToChange.lbClass.prepForRun()
+                    taskDict = nodeToChange.lbClass.extraParams["tasks"]
+
+        # # debugDict = {nodeTag:[baseNode,[]]}
+        # baseNode.lbClass.extraVars["MIPGap"] = maxMIPGap
+        nodesOfPast = tuple(nodeDict.keys())
+
+        maxNodes = bnbParamDict['maxNodes'] + nodeID
+        maxBranchDepth = bnbParamDict['maxBranchDepth']
+        maxTime = bnbParamDict['maxTime']
+        minObjGap = bnbParamDict['minObjGap']
+        minPercObjGap = 1+bnbParamDict['minPercObjGap']
+        endTime = maxTime + time.time()
+        outBranchedNodes = {}
+        outBranchedLbVals = {}
+        outBranchedUbVals = {}
+        while (nodeID < maxNodes and time.time() < endTime and len(lbValDict) > 0 and
+               (globalUb[-1] > globalLb[-1] + minObjGap and globalUb[-1] > minPercObjGap * globalLb[-1]) and
+                (globalUb[-1] > callibrationVal + minObjGap and globalUb[-1] > minPercObjGap * callibrationVal)):
+            # find node to split on
+            branchTag = findBranch(branchMeth, lbValDict, ubValDict, globalUb, globalLb)
+            newNodeDepth = branchTag[1] + 1
+
+            # get node info
+            branchNode = nodeDict.pop(branchTag)
+            branchLbVal = lbValDict.pop(branchTag)
+            branchUbVal = ubValDict.pop(branchTag)
+            branchGap = 0.25*((branchUbVal - branchLbVal)/branchUbVal)
+            # find split ineqs
+            lbConstr, ubConstr = branchNode.findInequality()
+
+            # create new nodes
+            splitOnPastStage = (branchTag in nodesOfPast)
+            branchNode.lbClass.firstRun = splitOnPastStage
+            newMIPGap = min(maxMIPGap, branchGap)
+            lbNode, lbTag, ubNode, ubTag, nodeID = branchNode.split(lbConstr, ubConstr, nodeID, newMIPGap)
+
+            # lbConstrList = debugDict[branchNode.tag][1].copy()
+            # lbConstrList.append(lbConstr)
+            # debugDict[lbTag] = [lbNode, lbConstrList]
+            # ubConstrList = debugDict[branchNode.tag][1].copy()
+            # ubConstrList.append(ubConstr)
+            # debugDict[ubTag] = [ubNode, ubConstrList]
+            if updateBoolBranch:
+                print(f"Branched on node {branchTag} (lb:{branchLbVal:.3f}, ub:{branchUbVal:.3f}),"
+                      f" creating the following nodes:")
+            # bound new nodes
+            ubValLb, ubSolLb, lbValLb, lbTime, ubTime = lbNode.bound()
+            relNodeId = lbNode.tag[0]
+            lbValArray[relNodeId] = lbValLb
+            lbTimeArray[relNodeId] = lbTime
+            ubValArray[relNodeId] = ubValLb
+            ubTimeArray[relNodeId] = ubTime
+            if updateBoolBranch:
+                print(f"\t {lbTag} \t(lb:{lbValLb:.3f}, ub:{ubValLb:.3f}), \ttourweight[{lbConstr[1]}]>={lbConstr[2]}")
+            ubValUb, ubSolUb, lbValUb, lbTime, ubTime = ubNode.bound()
+            relNodeId = ubNode.tag[0]
+            lbValArray[relNodeId] = lbValUb
+            lbTimeArray[relNodeId] = lbTime
+            ubValArray[relNodeId] = ubValUb
+            ubTimeArray[relNodeId] = ubTime
+
+            if updateBoolBranch:
+                print(f"\t {ubTag} \t(lb:{lbValUb:.3f}, ub:{ubValUb:.3f}), \ttourweight[{ubConstr[1]}]<={ubConstr[2]}")
+            # update global upperbound
+            if ubValLb < globalUb[-1]:
+                globalUb = [lbTag, ubSolLb, ubValLb]
+            if ubValUb < globalUb[-1]:
+                globalUb = [ubTag, ubSolUb, ubValUb]
+
+            # check if new nodes are to be added
+            if lbValLb <= globalUb[-1]:
+                if newNodeDepth < maxBranchDepth:
+                    ubValDict[lbTag] = ubValLb
+                    lbValDict[lbTag] = lbValLb
+                    nodeDict[lbTag] = lbNode
+                else:
+                    if lbParamDict["method"] == "screenlineBasedLP":
+                        del lbNode.lbClass.solutionFinal, lbNode.lbClass.solutionTranspose
+                    outBranchedNodes[lbTag] = lbNode
+                    outBranchedLbVals[lbTag] = lbValLb
+                    outBranchedUbVals[lbTag] = ubValLb
+
+            if lbValUb <= globalUb[-1]:
+                if newNodeDepth < maxBranchDepth:
+                    ubValDict[ubTag] = ubValUb
+                    lbValDict[ubTag] = lbValUb
+                    nodeDict[ubTag] = ubNode
+                else:
+                    if lbParamDict["method"] == "screenlineBasedLP":
+                        del ubNode.lbClass.solutionFinal, ubNode.lbClass.solutionTranspose
+                    outBranchedNodes[ubTag] = ubNode
+                    outBranchedLbVals[ubTag] = lbValUb
+                    outBranchedUbVals[ubTag] = ubValUb
+
+            # prune nodes
+            nodesToPrune = []
+            for tag, value in lbValDict.items():
+                if value > globalUb[-1]:
+                    nodesToPrune.append(tag)
+            for tag in nodesToPrune:
+                ubValDict.pop(tag)
+                lbValDict.pop(tag)
+                nodeDict.pop(tag)
+
+            # prune outbranched nodes
+            nodesToPrune = []
+            for tag, value in outBranchedLbVals.items():
+                if value > globalUb[-1]:
+                    nodesToPrune.append(tag)
+            for tag in nodesToPrune:
+                outBranchedUbVals.pop(tag)
+                outBranchedLbVals.pop(tag)
+                outBranchedNodes.pop(tag)
+
+            # update global lowerbound
+            if lbValDict:
+                globalLb = list(min(lbValDict.items(), key=lambda tup: tup[1]))
+                # outBranchedGLb = list(min(outBranchedLbVals.items(), key=lambda tup: tup[1]))
+                # if outBranchedGLb[1] < globalLb[1]:
+                #     globalLb = outBranchedGLb
+        if lbParamDict["method"] == "screenlineBasedLP":
+            for node in nodeDict.values():
+                del node.lbClass.solutionFinal, node.lbClass.solutionTranspose
+        for tag, node in outBranchedNodes.items():
+            nodeDict[tag] = node
+            lbValDict[tag] = outBranchedLbVals[tag]
+            ubValDict[tag] = outBranchedUbVals[tag]
+        globalLb = list(min(lbValDict.items(), key=lambda tup: tup[1]))
+        breakpointsArray[stageIdx] = nodeID
+
+    return globalUb, globalLb, breakpointsArray
+
+
 
 
 def clusterTester():
@@ -2125,6 +2385,101 @@ def writeTestToExcel(ubMethod, lbMethod):
     final_df.to_excel(output_file, index=True)
 
 
+def writeTestToExcelTwo(totalParameterDict, breakpointArray):
+    lbMethodList = [totalDict["lb"]["method"] for totalDict in totalParameterDict]
+    ubMethodList = [totalDict["ub"]["method"] for totalDict in totalParameterDict]
+
+    # Create the DataFrame
+    data = {
+        "lbTime": lbTimeArray,
+        "lbVal": lbValArray,
+        "ubTime": ubTimeArray,
+        "ubVal": ubValArray
+    }
+    df = pd.DataFrame(data)
+
+    # Remove rows from breakpointArray[-1] onward
+    df = df.iloc[:breakpointArray[-1]]
+
+    # Adjust indices according to groups
+    group_indices = []
+    group_labels = []
+    group_start = 0
+    group_end = breakpointArray[0]
+    group_label = f"{lbMethodList[0]}_{ubMethodList[0]}_"
+    group_indices.extend(range(group_start, group_end))
+    group_labels.extend([group_label] * (group_end - group_start))
+    for groupIdx in range(len(breakpointArray) - 1):
+        group_start = breakpointArray[groupIdx]
+        group_end = breakpointArray[groupIdx + 1]
+        group_label = f"{lbMethodList[groupIdx+1]}_{ubMethodList[groupIdx+1]}_"
+        group_indices.extend(range(group_start, group_end))
+        group_labels.extend([group_label] * (group_end - group_start))
+
+    # Apply new group-based index
+    group_labels = [group_labels[idx]+f"{group_indices[idx]}" for idx in range(breakpointArray[-1])]
+    df.index = group_labels
+
+    # Initialize headers and summary data dictionary
+    headers = [
+        "mean",
+        "std",
+        "minimal",
+        "maximum"
+    ]
+    summary_data = {col: [] for col in df.columns}
+
+    # Calculate statistics for the range 0 to breakpointArray[-1]
+    range_end = breakpointArray[-1]
+    for column in df.columns:
+        column_values = data[column][:range_end]
+        summary_data[column].extend([
+            np.mean(column_values),
+            np.std(column_values),
+            np.min(column_values),
+            np.max(column_values)
+        ])
+
+    # Calculate statistics for each group defined by breakpointArray
+    nrOfGroups = len(lbMethodList) - 1
+    for groupIdx in range(nrOfGroups):
+        group_start = breakpointArray[groupIdx]
+        group_end = breakpointArray[groupIdx + 1]
+        for column in df.columns:
+            group_values = data[column][group_start:group_end]
+            summary_data[column].extend([
+                np.mean(group_values),
+                np.std(group_values),
+                np.min(group_values),
+                np.max(group_values)
+            ])
+
+    # Generate index for the summary DataFrame
+    summary_index = ["overall " + header for header in headers]
+    for groupIdx in range(nrOfGroups):
+        group_prefix = f"{lbMethodList[groupIdx + 1]}_{ubMethodList[groupIdx + 1]}"
+        summary_index.extend([group_prefix + " " + header for header in headers])
+
+    # Convert summary data to DataFrame
+    summary_df = pd.DataFrame(summary_data, index=summary_index)
+
+    # Concatenate summary rows and data
+    final_df = pd.concat([summary_df, df], ignore_index=False)
+
+    # Generate output file name
+    curTime = datetime.now().strftime("%d_%m_%y_%H-%M-%S")
+    output_file = ""
+    for stageIdx in range(len(lbMethodList)):
+        if stageIdx == 0:
+            output_file += f"{translationDict[lbMethodList[stageIdx]]}-{translationDict[ubMethodList[stageIdx]]}"
+        else:
+            output_file += f"_{translationDict[lbMethodList[stageIdx]]}-{translationDict[ubMethodList[stageIdx]]}"
+    output_file += f"_data_{curTime}.xlsx"
+
+    # Save to Excel
+    final_df.to_excel(output_file, index=True)
+
+
 # ideas for parameters
 # BCO, very high max depth as first, change max no Improvement to max no large improvement with boundry (100?)
 
@@ -2164,12 +2519,8 @@ translationDict = {
 }
 
 if __name__ == '__main__':
-    parametersType = -5
-    nodeLimit = 63
-    lbValArray = np.zeros(nodeLimit)
-    lbTimeArray = np.zeros(nodeLimit)
-    ubValArray = np.zeros(nodeLimit)
-    ubTimeArray = np.zeros(nodeLimit)
+    parametersType = "multistage"
+
 
 
     if parametersType == 1:
@@ -2324,7 +2675,12 @@ if __name__ == '__main__':
         lb.makeModel(True)
         lb.bound()
         print(np.where(lb.solution - np.round(lb.solution)>0.0002))
-    elif parametersType == -5:
+    elif parametersType == "singlestage":
+        nodeLimit = 63
+        lbValArray = np.zeros(nodeLimit)
+        lbTimeArray = np.zeros(nodeLimit)
+        ubValArray = np.zeros(nodeLimit)
+        ubTimeArray = np.zeros(nodeLimit)
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
         screenlinesFile = "ScreenlinesDiscreetV2.json"
@@ -2358,7 +2714,7 @@ if __name__ == '__main__':
         splitInequalityParameterDict = {"ineqType":"tourBased", "lbOutputType":"csr"}
         branchAndBoundParameterDict = {"branchMethod":"breadthFirst",
                                        "maxNodes":nodeLimit, "maxBranchDepth":5, "maxTime":36000,
-                                       "minObjGap":0, "minPercObjGap":0.05, "maxMIPGap":0.00001,
+                                       "minObjGap":0, "minPercObjGap":0.000001, "maxMIPGap":0.00001,
                                        "ubUpdates":False, "ubBasicUpdates":False,
                                        "lbUpdates":False, "lbBasicUpdates":False,
                                        "branchingUpdates":True}
@@ -2366,6 +2722,80 @@ if __name__ == '__main__':
         branchAndBound(upperboundParameterDict, lowerboundParameterDict, splitInequalityParameterDict,
                        branchAndBoundParameterDict, upperBoundDeeperParameterDict, lowerBoundDeeperParameterDict)
         writeTestToExcel(upperboundParameterDict["method"],lowerboundParameterDict["method"])
+    elif parametersType == "multistage":
+        interceptFile = "CountsV2.json"
+        screenlinesUsed = True
+        screenlinesFile = "ScreenlinesDiscreetV2.json"
+        tourDictFile = "superclusters.json"
+        tourOnODDictFile = "clusterOnODDict.json"
+        adjsofile = "adjSlOD.npz"
+        adjtofile = "adjTourOD.npz"
+        adjtsfile = "adjClSl.npz"
+        neighofile = "neighboursOD.npz"
+        neighsfile = "neighboursSl.npz"
+        startTime = time.time()
+        readInModelParams2(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile, adjsofile,
+                           adjtofile, adjtsfile, neighofile, neighsfile)
+
+
+        upperboundParameterDictBCO = {"method": "BCO",
+                                        "methodParameters": extraParamsBCOTotal}  # tabooSearch BCO none
+        upperBoundParameterDictTaboo = {"method": "tabooSearch",
+                                         "methodParameters": extraParamsTabooFirst}
+        upperBoundParameterDictTabooFake = {"method": "tabooSearch",
+                                                "methodParameters": extraParamsTabooFake}
+        upperBoundParameterDictNone = {"method": "none",
+                                            "methodParameters": extraParamsTabooFake}
+        lowerboundParameterDictSBLP = {"method": "screenlineBasedLP"}  # linearRelaxation screenlineBasedLP
+        lowerBoundParameterDictLr = {"method": "linearRelaxation"}
+        splitInequalityParameterDictCsr = {"ineqType": "tourBased", "lbOutputType": "csr"}
+        splitInequalityParameterDictArray = {"ineqType": "tourBased", "lbOutputType": "array"}
+        # "globalLb", "bestUb", "smallestGap", "worstLb", "depthFirst", "breadthFirst", "aroundGUb"
+        branchAndBoundParameterDictCal = {"branchMethod": "breadthFirst",
+                                            "maxNodes": 1, "maxBranchDepth": 5, "maxTime": 36000,
+                                            "minObjGap": 0, "minPercObjGap": 0.000001, "maxMIPGap": 0.00001,
+                                            "ubUpdates": False, "ubBasicUpdates": False,
+                                            "lbUpdates": False, "lbBasicUpdates": False,
+                                            "branchingUpdates": True}
+        branchAndBoundParameterDictFirst = {"branchMethod": "globalLb",
+                                            "maxNodes": 2000, "maxBranchDepth": 26, "maxTime": 36000,
+                                            "minObjGap": 0, "minPercObjGap": 0.000001, "maxMIPGap": 0.00001,
+                                            "ubUpdates": False, "ubBasicUpdates": False,
+                                            "lbUpdates": False, "lbBasicUpdates": False,
+                                            "branchingUpdates": False}
+        branchAndBoundParameterDictSecond = {"branchMethod": "globalLb",
+                                                "maxNodes": 1024, "maxBranchDepth": 3000, "maxTime": 36000,
+                                                "minObjGap": 0, "minPercObjGap": 0.000001, "maxMIPGap": 0.00001,
+                                                "ubUpdates": False, "ubBasicUpdates": False,
+                                                "lbUpdates": False, "lbBasicUpdates": False,
+                                                "branchingUpdates": True}
+        totalParamaterDicts = [
+            {
+                "bnb":branchAndBoundParameterDictCal,
+                "split":splitInequalityParameterDictArray,
+                "ub":upperBoundParameterDictTaboo,
+                "lb":lowerBoundParameterDictLr
+            },{
+                "bnb":branchAndBoundParameterDictFirst,
+                "split":splitInequalityParameterDictCsr,
+                "ub":upperBoundParameterDictTabooFake,
+                "lb":lowerboundParameterDictSBLP
+            },{
+                "bnb":branchAndBoundParameterDictSecond,
+                "split":splitInequalityParameterDictArray,
+                "ub":upperBoundParameterDictTaboo,
+                "lb":lowerBoundParameterDictLr
+            }
+        ]
+        nodeResultSize = 4*len(totalParamaterDicts) + sum(totalParamaterDicts[i]["bnb"]["maxNodes"]
+                                                          for i in range(len(totalParamaterDicts)))
+        lbValArray = np.zeros(nodeResultSize)
+        lbTimeArray = np.zeros(nodeResultSize)
+        ubValArray = np.zeros(nodeResultSize)
+        ubTimeArray = np.zeros(nodeResultSize)
+        gUb, gLb, bpa = multiStageBranchAndBound(totalParamaterDicts)
+        print(f"found a solution with value {gUb[-1]} lb:{gLb[-1]}")
+        writeTestToExcelTwo(totalParamaterDicts, bpa)
     else:
         interceptFile = "CountsV2.json"
         screenlinesUsed = True

@@ -4,11 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="899dcb0d-3b10-4d56-b9d1-e779b2b4e996" name="Changes" comment="start customlb">
-      <change afterPath="$PROJECT_DIR$/readAndProcessClusters.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/InternshipTourTrip.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/InternshipTourTrip.iml" afterDir="false" />
+    <list default="true" id="899dcb0d-3b10-4d56-b9d1-e779b2b4e996" name="Changes" comment="Did oh so much, why don't I commit more often">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/BranchAndBound.py" beforeDir="false" afterPath="$PROJECT_DIR$/BranchAndBound.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -22,7 +20,15 @@
       </list>
     </option>
   </component>
+  <component name="Git.Merge.Settings">
+    <option name="BRANCH" value="master" />
+  </component>
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="notPool" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
   <component name="ProjectColorInfo">{
@@ -34,22 +40,47 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Python.main (1).executor": "Run",
-    "Python.main.executor": "Run",
-    "Python.readAndProcessClusters.executor": "Debug",
-    "RunOnceActivity.OpenProjectViewOnStart": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "node.js.detected.package.eslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "editing.templates",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Python.BranchAndBound.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.main (1).executor&quot;: &quot;Debug&quot;,
+    &quot;Python.main.executor&quot;: &quot;Run&quot;,
+    &quot;Python.readAndProcessClusters.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;Errors&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
-  <component name="RunManager" selected="Python.readAndProcessClusters">
+}</component>
+  <component name="RunManager" selected="Python.BranchAndBound">
+    <configuration name="BranchAndBound" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="InternshipTourTrip" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/BranchAndBound.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
     <configuration default="true" type="PythonConfigurationType" factoryName="Python">
       <module name="InternshipTripTour" />
       <option name="ENV_FILES" value="" />
@@ -180,6 +211,7 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.BranchAndBound" />
         <item itemvalue="Python.readAndProcessClusters" />
         <item itemvalue="Python.main (1)" />
         <item itemvalue="Python.main" />
@@ -202,9 +234,24 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1726044600473</updated>
-      <workItem from="1726471558261" duration="44206000" />
-      <workItem from="1728467183412" duration="385000" />
-      <workItem from="1729509169914" duration="5917000" />
+      <workItem from="1726655539175" duration="69022000" />
+      <workItem from="1726872955241" duration="11370000" />
+      <workItem from="1727870361096" duration="3266000" />
+      <workItem from="1727947456485" duration="12411000" />
+      <workItem from="1728590746331" duration="168000" />
+      <workItem from="1729683582158" duration="4175000" />
+      <workItem from="1729846395750" duration="22303000" />
+      <workItem from="1730036190940" duration="20340000" />
+      <workItem from="1730467093956" duration="10214000" />
+      <workItem from="1730477939206" duration="3084000" />
+      <workItem from="1730549426663" duration="26997000" />
+      <workItem from="1730668643720" duration="21000" />
+      <workItem from="1730718416280" duration="17997000" />
+      <workItem from="1730901157278" duration="8817000" />
+      <workItem from="1730986899224" duration="4219000" />
+      <workItem from="1730991228107" duration="11572000" />
+      <workItem from="1731059727441" duration="31836000" />
+      <workItem from="1731430147900" duration="10333000" />
     </task>
     <task id="LOCAL-00001" summary="ahhh">
       <option name="closed" value="true" />
@@ -214,41 +261,89 @@
       <option name="project" value="LOCAL" />
       <updated>1726046962428</updated>
     </task>
-    <task id="LOCAL-00002" summary="ahhh&#10;&#10;(cherry picked from commit 8ae94626962360c2c96bcc35a514b6ec17d902d7)">
+    <task id="LOCAL-00002" summary="dataframes are good and model is built (no constraints or objectives yet)">
       <option name="closed" value="true" />
-      <created>1726128219291</created>
+      <created>1728590900325</created>
       <option name="number" value="00002" />
       <option name="presentableId" value="LOCAL-00002" />
       <option name="project" value="LOCAL" />
-      <updated>1726128219291</updated>
+      <updated>1728590900325</updated>
     </task>
-    <task id="LOCAL-00003" summary="ahhh&#10;&#10;(cherry picked from commit 8ae94626962360c2c96bcc35a514b6ec17d902d7)">
+    <task id="LOCAL-00003" summary="Started reformatting parameters to matrices and vectors, allowing for better accessing and calculations.&#10;&#10;&#10;Based on Series with name as row header and 0-indexed indices as value.">
       <option name="closed" value="true" />
-      <created>1726656036554</created>
+      <created>1729875031313</created>
       <option name="number" value="00003" />
       <option name="presentableId" value="LOCAL-00003" />
       <option name="project" value="LOCAL" />
-      <updated>1726656036554</updated>
+      <updated>1729875031313</updated>
     </task>
-    <task id="LOCAL-00004" summary="start customlb">
+    <task id="LOCAL-00004" summary="Finished Taboosearch for basic solution">
       <option name="closed" value="true" />
-      <created>1727884605784</created>
+      <created>1730057173996</created>
       <option name="number" value="00004" />
       <option name="presentableId" value="LOCAL-00004" />
       <option name="project" value="LOCAL" />
-      <updated>1727884605784</updated>
+      <updated>1730057173996</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="updated a bit">
+      <option name="closed" value="true" />
+      <created>1730467566056</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1730467566056</updated>
+    </task>
+    <task id="LOCAL-00006" summary="Both stuff sorta done, still has errors?">
+      <option name="closed" value="true" />
+      <created>1730580173094</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1730580173094</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Step before array conversion">
+      <option name="closed" value="true" />
+      <created>1730901309555</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1730901309555</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Did oh so much, why don't I commit more often">
+      <option name="closed" value="true" />
+      <created>1731091882581</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1731091882581</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
   </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="ahhh" />
-    <MESSAGE value="ahhh&#10;&#10;(cherry picked from commit 8ae94626962360c2c96bcc35a514b6ec17d902d7)" />
-    <MESSAGE value="start customlb" />
-    <option name="LAST_COMMIT_MESSAGE" value="start customlb" />
+    <MESSAGE value="dataframes are good and model is built (no constraints or objectives yet)" />
+    <MESSAGE value="Started reformatting parameters to matrices and vectors, allowing for better accessing and calculations.&#10;&#10;&#10;Based on Series with name as row header and 0-indexed indices as value." />
+    <MESSAGE value="Finished Taboosearch for basic solution" />
+    <MESSAGE value="updated a bit" />
+    <MESSAGE value="Both stuff sorta done, still has errors?" />
+    <MESSAGE value="Step before array conversion" />
+    <MESSAGE value="Did oh so much, why don't I commit more often" />
+    <option name="LAST_COMMIT_MESSAGE" value="Did oh so much, why don't I commit more often" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
@@ -260,25 +355,40 @@
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/main.py</url>
-          <line>226</line>
-          <option name="timeStamp" value="21" />
+          <line>471</line>
+          <option name="timeStamp" value="2" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/main.py</url>
-          <line>201</line>
-          <option name="timeStamp" value="22" />
+          <url>file://$PROJECT_DIR$/BranchAndBound.py</url>
+          <line>261</line>
+          <option name="timeStamp" value="28" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/readAndProcessClusters.py</url>
-          <line>38</line>
-          <option name="timeStamp" value="25" />
+          <url>file://$PROJECT_DIR$/BranchAndBound.py</url>
+          <line>1434</line>
+          <option name="timeStamp" value="42" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/BranchAndBound.py</url>
+          <line>195</line>
+          <option name="timeStamp" value="43" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/BranchAndBound.py</url>
+          <line>1035</line>
+          <option name="timeStamp" value="104" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
+    <watches-manager>
+      <configuration name="PythonConfigurationType">
+        <watch expression="self" />
+      </configuration>
+    </watches-manager>
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/InternshipTourTrip$main.coverage" NAME="main Coverage Results" MODIFIED="1726051357982" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/InternshipTourTrip$main__1_.coverage" NAME="main (1) Coverage Results" MODIFIED="1727099985549" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/InternshipTourTrip$readAndProcessClusters.coverage" NAME="readAndProcessClusters Coverage Results" MODIFIED="1729513416611" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/InternshipTourTrip$BranchAndBound.coverage" NAME="BranchAndBound Coverage Results" MODIFIED="1731440395620" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/InternshipTourTrip$main__1_.coverage" NAME="main (1) Coverage Results" MODIFIED="1727954557243" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/InternshipTourTrip$readAndProcessClusters.coverage" NAME="readAndProcessClusters Coverage Results" MODIFIED="1730479004501" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>

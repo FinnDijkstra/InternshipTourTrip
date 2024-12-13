@@ -414,12 +414,12 @@ class upperboundClass:
         # print(self.boundNecessary)
 
     def bound(self):
-        if self.ubMethod == "tabooSearch" and self.boundNecessary:
+        if self.ubMethod == "tabooSearch":
             # lp = LineProfiler()
             # lp_wrapper = lp(self.tabooSearch)
             # self.solution, self.value = lp_wrapper(startingWeights=self.solution)
             # lp.print_stats()
-            self.solution, self.value = self.tabooSearch(startingWeights=self.solution)
+            self.solution, self.value = self.tabooSearch()
         elif self.ubMethod == "BCO":
             self.solution, self.value = self.beeColonyOptimization()
         elif self.ubMethod == "none":
@@ -428,8 +428,10 @@ class upperboundClass:
     def tabooSearch(self, startingWeights=None, maxNoImprovement=None, maxDepth=None, tabooLength=None):
         if startingWeights is None:
             minWeights = self.solution
+            primaryMethodBool = True
         else:
             minWeights = startingWeights
+            primaryMethodBool = False
         curWeights = minWeights.copy()
         minValue, solCounts = self.evaluateSolution(curWeights)
         tempValue = minValue
@@ -454,7 +456,8 @@ class upperboundClass:
             tabooLength = self.ubMethodParameters["tabooLength"]
         printDepth = self.ubMethodParameters.get("printDepth", 1000000)
         recallDepth = self.ubMethodParameters.get("recallDepth",10000000)
-
+        if primaryMethodBool and not self.boundNecessary:
+            maxDepth = maxDepth // 2
         depth = 0
         lastImprovement = 0
         sumOfSizes = 0
@@ -1125,7 +1128,7 @@ class lowerboundClass:
         self.extraVars = lbParamDict.get("extraVars", {})
 
         if self.lbMethod == "linearRelaxation" and not self.extraVars:
-            self.extraVars["MIPGap"] = 0.5
+            self.extraVars["MIPGap"] = 0.00022
         elif self.lbMethod == "linearRelaxationScipy" and not self.extraVars:
             self.extraVars["MIPGap"] = 0.5
 
@@ -1997,6 +2000,27 @@ def branchAndBound(ubParamDict, lbParamDict, splitParamDict, bnbParamDict, ubDee
     return globalUb, globalLb
 
 
+def listOfMinTags(nodeDictToSort, minOfnrMin):
+
+    nodeMinTups = [(tag, node.lbClass.value) for tag, node in nodeDictToSort.items()]
+    nodeMinTups.sort(key=lambda nodeTup: nodeTup[1])
+    breakpointValue = nodeMinTups[minOfnrMin-1][1]+1
+    # Collect the first n unique lowest values
+    minVals = []
+    for _, value in nodeMinTups:
+        if len(minVals) < minOfnrMin or value <= breakpointValue:
+            if value not in minVals:
+                minVals.append(value)
+        else:
+            break
+
+    # Get all tags that have one of the lowest n values
+    result = [tag for tag, value in nodeMinTups if value in minVals]
+
+    return result
+
+
+
 
 def multiStageBranchAndBound(totalParameterDict):
     nodeID = 0
@@ -2066,6 +2090,7 @@ def multiStageBranchAndBound(totalParameterDict):
 
 
     needReset = []
+    discardedNodes = {}
     nrOfStages = len(totalParameterDict)
     breakpointsArray = np.zeros(nrOfStages, dtype=int)
     breakpointsArray[0] = 1
@@ -2075,6 +2100,11 @@ def multiStageBranchAndBound(totalParameterDict):
         updateBoolBranch = setUpdateBoolsSinglePair(bnbParamDict, lbParamDict, ubParamDict)
         branchMeth = bnbParamDict['branchMethod']
         maxMIPGap = bnbParamDict["maxMIPGap"]
+        maxStartingNodes = bnbParamDict["maxStartingNodes"]
+        if len(nodeDict) > maxStartingNodes:
+            nodesToKeep = listOfMinTags(nodeDict, maxStartingNodes)
+            discardedNodes.update(nodeDict)
+            nodeDict = {tag:nodeDict[tag] for tag in nodesToKeep}
 
         for nodeToChange in nodeDict.values():
             nodeToChange.changeType(newUbType=ubParamDict["method"],
@@ -2488,13 +2518,13 @@ extraParamsBCO = {"locN":10, "topLocN":3,
                   "scoutN":3, "scoutStepsN":50000, "scoutMaxNoImprovement":3000, "scoutListN":1600,
                   "disturbN":2500,"topLocWorkerN":25,"lowWorkerN":10,
                   "workerStepsN":3000,"workerMaxNoImprovement":750,"workerListN":400,
-                  "maxDepthBCO":25,"maxTimeBCO":12000,"maxNoImprovementBCO":4,"maxTimeTaboo":150}
+                  "maxDepthBCO":25,"maxTimeBCO":12000,"maxNoImprovementBCO":2,"maxTimeTaboo":150}
 
 extraParamsBCOHighLoc = {"locN":50, "topLocN":12,
                           "scoutN":50, "scoutStepsN":2500, "scoutMaxNoImprovement":1250, "scoutListN":550,
                           "disturbN":25,"topLocWorkerN":15,"lowWorkerN":5,
                           "workerStepsN":300,"workerMaxNoImprovement":150,"workerListN":80,
-                          "maxDepthBCO":10,"maxTimeBCO":1200,"maxNoImprovementBCO":4,"maxTimeTaboo":15}
+                          "maxDepthBCO":10,"maxTimeBCO":1200,"maxNoImprovementBCO":2,"maxTimeTaboo":15}
 
 extraParamsBCOTotal = {"maxCallDiff":100000, "farDict":extraParamsBCO, "closeDict":extraParamsBCOHighLoc}
 
@@ -2519,8 +2549,8 @@ translationDict = {
 }
 
 if __name__ == '__main__':
-    parametersType = "multistage"
-
+    parametersType = -4
+    # singlestage  multistage
 
 
     if parametersType == 1:
@@ -2672,11 +2702,13 @@ if __name__ == '__main__':
 
 
         lb = lowerboundClass({"method":"linearRelaxation"})
+        lb.updateBool = True
         lb.makeModel(True)
         lb.bound()
         print(np.where(lb.solution - np.round(lb.solution)>0.0002))
     elif parametersType == "singlestage":
-        nodeLimit = 63
+        print("Started running at: "+datetime.now().strftime("%d_%m_%y_%H-%M-%S"))
+        nodeLimit = 1023
         lbValArray = np.zeros(nodeLimit)
         lbTimeArray = np.zeros(nodeLimit)
         ubValArray = np.zeros(nodeLimit)
@@ -2705,16 +2737,20 @@ if __name__ == '__main__':
         # lp.print_stats()
         # extraParamsTabooFirst extraParamsTabooSecond extraParamsTabooFake extraParamsBCO extraParamsBCOHighLoc
         # extraParamsBCOTotal
-        upperboundParameterDict = {"method":"BCO",
-                                   "methodParameters":extraParamsBCOTotal}     # tabooSearch BCO none
+        upperboundParameterDictBCO = {"method": "BCO",
+                                      "methodParameters": extraParamsBCOTotal}  # tabooSearch BCO none
+        upperBoundParameterDictTaboo = {"method": "tabooSearch",
+                                        "methodParameters": extraParamsTabooFirst}
+        upperBoundParameterDictNone = {"method": "none",
+                                       "methodParameters": extraParamsTabooFake}
+        upperboundParameterDict = upperboundParameterDictBCO   # tabooSearch BCO none
         lowerboundParameterDict = {"method":"screenlineBasedLP"}                 # linearRelaxation screenlineBasedLP
-        upperBoundDeeperParameterDict = {"method":"BCO",
-                                            "methodParameters":extraParamsBCOTotal}
+        upperBoundDeeperParameterDict = upperboundParameterDictBCO
         lowerBoundDeeperParameterDict = {"method":"screenlineBasedLP"}
-        splitInequalityParameterDict = {"ineqType":"tourBased", "lbOutputType":"csr"}
+        splitInequalityParameterDict = {"ineqType":"tourBased", "lbOutputType":"array"}
         branchAndBoundParameterDict = {"branchMethod":"breadthFirst",
-                                       "maxNodes":nodeLimit, "maxBranchDepth":5, "maxTime":36000,
-                                       "minObjGap":0, "minPercObjGap":0.000001, "maxMIPGap":0.00001,
+                                       "maxNodes":nodeLimit, "maxBranchDepth":9, "maxTime":1800,
+                                       "minObjGap":0, "minPercObjGap":0.000001, "maxMIPGap":0.0,
                                        "ubUpdates":False, "ubBasicUpdates":False,
                                        "lbUpdates":False, "lbBasicUpdates":False,
                                        "branchingUpdates":True}
@@ -2756,19 +2792,19 @@ if __name__ == '__main__':
                                             "minObjGap": 0, "minPercObjGap": 0.000001, "maxMIPGap": 0.00001,
                                             "ubUpdates": False, "ubBasicUpdates": False,
                                             "lbUpdates": False, "lbBasicUpdates": False,
-                                            "branchingUpdates": True}
-        branchAndBoundParameterDictFirst = {"branchMethod": "globalLb",
-                                            "maxNodes": 2000, "maxBranchDepth": 26, "maxTime": 36000,
+                                            "branchingUpdates": True, "maxStartingNodes":8}
+        branchAndBoundParameterDictFirst = {"branchMethod": "breadthFirst",
+                                            "maxNodes": 4094, "maxBranchDepth": 11, "maxTime": 600,
                                             "minObjGap": 0, "minPercObjGap": 0.000001, "maxMIPGap": 0.00001,
                                             "ubUpdates": False, "ubBasicUpdates": False,
                                             "lbUpdates": False, "lbBasicUpdates": False,
-                                            "branchingUpdates": False}
+                                            "branchingUpdates": False, "maxStartingNodes":8}
         branchAndBoundParameterDictSecond = {"branchMethod": "globalLb",
-                                                "maxNodes": 1024, "maxBranchDepth": 3000, "maxTime": 36000,
+                                                "maxNodes": 1024, "maxBranchDepth": 3000, "maxTime": 6600,
                                                 "minObjGap": 0, "minPercObjGap": 0.000001, "maxMIPGap": 0.00001,
                                                 "ubUpdates": False, "ubBasicUpdates": False,
                                                 "lbUpdates": False, "lbBasicUpdates": False,
-                                                "branchingUpdates": True}
+                                                "branchingUpdates": True, "maxStartingNodes":8}
         totalParamaterDicts = [
             {
                 "bnb":branchAndBoundParameterDictCal,
@@ -2787,6 +2823,8 @@ if __name__ == '__main__':
                 "lb":lowerBoundParameterDictLr
             }
         ]
+
+
         nodeResultSize = 4*len(totalParamaterDicts) + sum(totalParamaterDicts[i]["bnb"]["maxNodes"]
                                                           for i in range(len(totalParamaterDicts)))
         lbValArray = np.zeros(nodeResultSize)

@@ -2255,7 +2255,7 @@ def multiStageBranchAndBound(totalParameterDict):
 
 
 
-def clusterTester():
+def clusterTester(superClusterFileName):
     relatedDictionary = []
     notInAGroup = [True]*nrOfClusters
     np.arange(nrOfClusters)
@@ -2307,12 +2307,12 @@ def clusterTester():
     print(relatedDictionary)
     print(sumOfSavings)
     print(largestGroup)
-    write_list(relatedDictionary)
+    write_list(relatedDictionary, superClusterFileName)
     x=1
 
-def write_list(a_list):
+def write_list(a_list, outputFileLocation):
     print("Started writing list data into a json file")
-    with open("names.json", "w") as fp:
+    with open(outputFileLocation, "w") as fp:
         json.dump(a_list, fp)
         print("Done writing JSON data into .json file")
 
@@ -2549,11 +2549,11 @@ translationDict = {
 }
 
 if __name__ == '__main__':
-    parametersType = -4
+    parametersType = "let gurobi find a discrete solution"
     # singlestage  multistage
 
 
-    if parametersType == 1:
+    if parametersType == "make sparce matrices":
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
         screenlinesFile = "ScreenlinesDiscreet.json"
@@ -2562,7 +2562,7 @@ if __name__ == '__main__':
 
         readInModelParams(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile)
         makeSparceAdjacencyMatrices()
-    elif parametersType == 2:
+    elif parametersType == "lower and upper bound test":
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
         screenlinesFile = "ScreenlinesDiscreetV2.json"
@@ -2613,7 +2613,7 @@ if __name__ == '__main__':
         print(x)
         plt.show()
         branchAndBoundParameterDict = {}
-    elif parametersType == -1:
+    elif parametersType == "make super clusters":
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
         screenlinesFile = "ScreenlinesDiscreetV2.json"
@@ -2627,8 +2627,8 @@ if __name__ == '__main__':
         startTime = time.time()
         readInModelParams2(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile, adjsofile,
                            adjtofile, adjtsfile, neighofile, neighsfile)
-        clusterTester()
-    elif parametersType == -2:
+        clusterTester("names.json")
+    elif parametersType == "make sparce matrices from super clusters":
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
         screenlinesFile = "ScreenlinesDiscreetV2.json"
@@ -2647,7 +2647,7 @@ if __name__ == '__main__':
         readInModelParams2(interceptFile, screenlinesUsed, screenlinesFile, tourDictFile, tourOnODDictFile, adjsofile,
                            adjtofile, adjtsfile, neighofile, neighsfile)
         superClustering(superclustersfile,superclustersOutfile,adjcsfile)
-    elif parametersType == -3:
+    elif parametersType == "branch and bound, no save":
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
         screenlinesFile = "ScreenlinesDiscreetV2.json"
@@ -2685,7 +2685,7 @@ if __name__ == '__main__':
                                        "branchingUpdates":True}
         branchAndBound(upperboundParameterDict, lowerboundParameterDict, splitInequalityParameterDict,
                        branchAndBoundParameterDict, upperBoundDeeperParameterDict, lowerBoundDeeperParameterDict)
-    elif parametersType == -4:
+    elif parametersType == "let gurobi find a discrete solution":
         interceptFile = "CountsV2.json"
         screenlinesUsed = True
         screenlinesFile = "ScreenlinesDiscreetV2.json"
